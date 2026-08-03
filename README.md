@@ -22,6 +22,10 @@ terraform init
 terraform plan
 ```
 
+## 아키텍처
+
+전체 AWS 인프라 설계(네트워크, EKS, RDS, CI/CD 등)는 [docs/aws-architecture.md](docs/aws-architecture.md) 참고.
+
 ## 관련 저장소
 
 | 저장소 | 역할 |
