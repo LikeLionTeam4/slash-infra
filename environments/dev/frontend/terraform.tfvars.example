@@ -1,4 +1,4 @@
 # 실제 값으로 채운 뒤 terraform.tfvars로 복사해서 쓴다 (커밋 금지 — .gitignore 처리됨).
-bucket_name    = "slash-frontend-dev"
+bucket_name    = "slash-web-dev"
 domain_name    = "dev.slash.example.com"
 hosted_zone_id = "Z0000000EXAMPLE"
