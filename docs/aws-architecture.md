@@ -7,14 +7,20 @@ Slash 프로젝트 전체(웹 프론트엔드 제외 백엔드 서비스군)를 
 - 대상 서비스: `slash-api`(코어 API), `slash-nlu`(자연어 분석), `slash-llm`(Gemma 추론), 그리고 이들을 잇는 공통 네트워크/DB/CI-CD 기반.
 - `slash-agent`는 사용자 PC에서 로컬로 도는 컴포넌트라 AWS 인프라 범위에서 제외.
 - 프론트엔드(`slash-web`)는 `modules/frontend-hosting`으로 이미 구현되어 있으므로 이 문서에서 재설계하지 않는다. 다만 API 인그레스 설계(§8)는 프론트엔드가 쓰는 CloudFront+ACM 패턴과 대칭이 되도록 맞춘다.
-- 환경은 **dev를 먼저 구축**한다. 아래 모든 리소스는 환경별로 복제 가능한 모듈 구조를 전제로 설계하고, prod로 확장할 때 값(인스턴스 크기, Multi-AZ 여부 등)만 다르게 넣는 방식을 목표로 한다.
+- 환경은 3단계로 나눈다 (자세한 역할은 §11):
+  - **local** — 개인 맥북에서 직접 `terraform apply`하는 실험용. 지금까지 만든 `environments/local/*`이 여기 해당.
+  - **dev** — prod와 거의 동일한 스펙을 유지하는 공유 테스트 서버. 아직 미구축.
+  - **prod** — 실제 운영 환경. 아직 미구축.
+- 아래 모든 리소스는 환경별로 복제 가능한 모듈 구조를 전제로 설계하고, 환경을 늘릴 때 값(인스턴스 크기, Multi-AZ 여부 등)만 다르게 넣는 방식을 목표로 한다.
 - 예산은 "적당히 여유 있음" — 비용 최소화보다 가용성·확장성을 우선한다. 다만 GPU 노드처럼 비용이 크게 튀는 항목은 §12에 별도로 짚는다.
 
 ## 2. 리전 & 태깅 전략
 
 - 기본 리전: `ap-northeast-2` (서울) — 기존 `environments/dev/frontend`와 동일.
 - ACM 인증서 중 CloudFront에 붙는 것만 `us-east-1`이 강제되므로, 프론트엔드와 동일하게 `aws.us_east_1` provider alias를 유지한다. API용 ALB 인증서는 리전 제약이 없으므로 `ap-northeast-2`에서 발급한다.
-- 네이밍 컨벤션은 기존 패턴을 그대로 따른다: 리소스명 `slash-<service>-<env>` (예: `slash-api-dev`, `slash-eks-dev`).
+- 네이밍 컨벤션은 기존 패턴을 그대로 따른다: 리소스명 `slash-<service>-<env>` (예: `slash-api-dev`, `slash-eks-dev`), `<env>`는 `local`/`dev`/`prod` 중 하나(§11).
+- **계정은 하나**(부트캠프 공유 AWS 계정 — `a-student-*` 등 여러 팀이 같이 쓴다)를 local/dev/prod 전부가 함께 쓰고, 네이밍/태그로만 구분한다. 다른 팀 리소스와 섞이지 않도록 `slash-` 접두사를 절대 빠뜨리지 않는다. AWS CLI 프로필은 `slash-local`/`slash-dev`/`slash-prod`로 이름만 분리해뒀다(현재는 동일 IAM 사용자 자격증명을 가리키며, 팀에서 계정/사용자를 분리하기로 하면 프로필 값만 바꾸면 된다).
+- 도메인은 가비아에서 구매한 `sbsh.cloud`를 쓴다. `environments/bootstrap`이 Route53 hosted zone을 관리하고, 가비아 네임서버를 그 zone의 NS 레코드로 변경해서 위임한다. 서브도메인 규칙은 prod=`sbsh.cloud`(apex), dev=`dev.sbsh.cloud`, local=`local.sbsh.cloud`.
 - **태그는 리소스 탐색/비용 추적의 1차 수단**으로 쓴다. 콘솔·Cost Explorer·Resource Groups에서 태그로 바로 걸러볼 수 있어야 하므로, 모든 리소스에 아래 태그를 빠짐없이 붙인다:
   - `Project=slash` — 프로젝트 전체 공통
   - `Service=<service>` — `api` / `nlu` / `llm` / `network` / `eks` / `frontend` 등 어느 서비스·구성요소 소속인지
@@ -32,6 +38,7 @@ Slash 프로젝트 전체(웹 프론트엔드 제외 백엔드 서비스군)를 
 **결정: DynamoDB 없이 S3 단독으로 처리한다.** Terraform 1.10에서 S3 backend에 `use_lockfile` 옵션이 실험적으로 추가됐고 1.11에서 정식(GA) 기능이 되면서 `dynamodb_table`은 deprecated됐다. S3의 conditional write(`If-None-Match`)만으로 state에 `.tflock` 락 파일을 만들었다 지우는 방식이라 DynamoDB 없이도 동일하게 동시 apply를 막을 수 있다. 현재 설치된 Terraform이 1.15.8이라 바로 사용 가능.
 
 - state 저장용 S3 버킷 1개 — 버저닝 활성화, 서버사이드 암호화, 퍼블릭 액세스 완전 차단. `environments/bootstrap/`에서 코드로 관리.
+- 같은 `environments/bootstrap/`이 local/dev/prod가 공유하는 Route53 hosted zone(`sbsh.cloud`)도 함께 관리한다 — state 백엔드처럼 "모든 환경이 의존하는 최초 1회 자원"이라는 성격이 같아서 묶었다. 향후 ECR, CloudTrail처럼 환경 공통 자원이 늘어나면 같은 위치에 추가한다.
 - 락은 `backend "s3" { ..., use_lockfile = true }` 설정만으로 처리되고, 별도 DynamoDB 테이블은 만들지 않는다.
 - 부트스트랩 리소스(state용 S3 버킷) 자체의 state는 로컬로 둔다 — 아직 참조할 backend가 없는 최초 리소스라 생기는 닭-달걀 문제. `apply` 후 로컬 state 파일은 백업해두고, 유실돼도 버킷 이름이 계정 ID로 결정되는 값이라 `terraform import`로 복구 가능.
 - 이후 만드는 모든 환경(예: `environments/dev/eks-test`)은 이 버킷을 `backend "s3"`로 참조하고, `required_version`을 `>=1.10.0`으로 올려서 `use_lockfile`을 쓴다.
@@ -44,7 +51,7 @@ Slash 프로젝트 전체(웹 프론트엔드 제외 백엔드 서비스군)를 
   - **public** — ALB, NAT Gateway.
   - **private-app** — EKS 노드. NAT Gateway를 통해서만 아웃바운드.
   - **private-db** — RDS, Valkey(ElastiCache). 인터넷 기본 경로 없음(IGW/NAT 라우트 모두 미부여) — S3 접근은 NAT를 거치지 않고 §4-1의 S3 Gateway Endpoint로만 처리.
-- 인터넷 게이트웨이는 1개(VPC당 1개면 충분 — AWS 리소스 특성상 여러 개를 둘 수 없음), NAT Gateway는 **AZ당 1개씩(가용성형)**을 기본값으로 확정한다. 예산에 여유가 있다는 전제([§1](#1-개요--범위))를 따른 결정 — 이전 버전 문서의 "dev는 비용형(NAT 1개)" 제안을 대체한다. 비용은 §12 참고.
+- 인터넷 게이트웨이는 1개(VPC당 1개면 충분 — AWS 리소스 특성상 여러 개를 둘 수 없음), NAT Gateway는 `modules/network`의 기본값으로 **AZ당 1개씩(가용성형)**을 쓴다 — dev/prod가 이 기본값 그대로. 예산에 여유가 있다는 전제([§1](#1-개요--범위))를 따른 결정. 다만 **local은 개인 실험용이라 `nat_gateway_per_az=false`로 오버라이드해 NAT 1개만 쓴다** (`environments/local/network`) — 3단계 도입 전 "dev부터 AZ당 1개" 방침을 local/dev+prod로 다시 나눈 것. 비용은 §12 참고.
 - IAM은 EKS 워크로드가 AWS 리소스(RDS 접근용 Secrets Manager, ECR pull 등)에 접근할 때 IRSA(IAM Roles for Service Accounts)를 전제로 설계한다. 노드 IAM Role에 광범위한 권한을 주지 않는다.
 
 ### 4-1. 보안그룹 & VPC 엔드포인트
@@ -73,7 +80,7 @@ Slash 프로젝트 전체(웹 프론트엔드 제외 백엔드 서비스군)를 
 
 ### 7-1. RDS PostgreSQL
 
-인스턴스 1개, DB 2개(`slash_dev`, `slash_demo`)로 분리하는 구성을 dev 단계부터 그대로 쓴다. **Multi-AZ는 dev부터 활성화** — 이전 버전 문서의 "dev는 단일 인스턴스" 방침을 대체한다(§1의 "가용성·확장성 우선" 예산 전제를 따름).
+인스턴스 1개, DB 2개(`slash_dev`, `slash_demo`)로 분리하는 구성을 dev 단계부터 그대로 쓴다. **Multi-AZ는 dev/prod부터 활성화**한다(§1의 "가용성·확장성 우선" 예산 전제를 따름) — local은 §4의 NAT와 같은 이유로 단일 AZ로 비용을 아낄지 아직 미확정, §13 TODO 참고.
 
 | 항목 | 값 | 비고 |
 | --- | --- | --- |
@@ -97,7 +104,7 @@ Slash 프로젝트 전체(웹 프론트엔드 제외 백엔드 서비스군)를 
 
 ## 8. 인그레스 & 도메인
 
-- AWS Load Balancer Controller로 ALB Ingress 구성, API 도메인(`api.dev.slash.example.com` 등, 실제 도메인은 §13 참고)에 대해 ACM 인증서(`ap-northeast-2`) 발급.
+- AWS Load Balancer Controller로 ALB Ingress 구성, API 도메인(`api.dev.sbsh.cloud`, prod는 `api.sbsh.cloud`)에 대해 ACM 인증서(`ap-northeast-2`) 발급.
 - 프론트엔드가 CloudFront+ACM(`us-east-1`)으로 서빙되는 것과 대칭 구조 — API는 리전 내 ALB+ACM으로 서빙.
 - Route53에 API 도메인용 A(alias) 레코드 추가 (프론트엔드 모듈의 `aws_route53_record` 패턴과 동일).
 
@@ -122,8 +129,16 @@ Terraform 밖에서 별도로 작업할 필요는 없다 — AWS provider가 Clo
 
 ## 11. 환경 전략
 
-- dev를 먼저 구현 완료.
-- prod 확장 시 두 가지 방식 중 선택 필요 (아직 미결정, 다음 라운드 인터뷰 대상):
+local/dev/prod 3단계로 나눈다. 계정은 하나(§2)를 공유하고, 아래 순서대로 구축한다.
+
+| 환경 | 역할 | 스펙 | 상태 |
+| --- | --- | --- | --- |
+| **local** | 개인 맥북에서 `terraform apply`하는 실험용 — 모듈 변경을 실제 AWS에서 검증 | 최소 구성 (`environments/local/*` 그대로) | `network`/`frontend` 구축, RDS/EKS는 다음 단계 |
+| **dev** | prod와 거의 동일한 스펙을 유지하는 공유 테스트 서버 — 팀 전체가 QA에 사용 | prod와 동일 모듈, 동일 값(인스턴스 크기 등) | 미구축 — local이 안정화된 뒤 착수 |
+| **prod** | 실제 운영 환경 | Multi-AZ, 가용성 우선 | 미구축 |
+
+- local에서 검증된 모듈을 그대로 dev/prod에 재사용한다 — 모듈 코드 자체는 세 환경이 동일하고, `environments/<env>/` root의 변수 값만 다르다.
+- prod 확장 시 EKS 구성 방식 두 가지 중 선택 필요 (아직 미결정, 다음 라운드 인터뷰 대상):
   - **네임스페이스 분리**: 같은 EKS 클러스터 안에서 `dev`/`prod` 네임스페이스로 나눔 — 비용 절감, 격리는 약함.
   - **클러스터 분리**: 환경별로 별도 EKS 클러스터 — 격리는 강하지만 비용·운영 부담 증가.
 
@@ -133,8 +148,8 @@ Terraform 밖에서 별도로 작업할 필요는 없다 — AWS provider가 Clo
 
 1. **EKS 컨트롤플레인 고정비** — 클러스터당 시간당 과금, 환경을 늘릴수록 누적.
 2. **GPU 노드(slash-llm)** — 온디맨드 g4dn/g5는 시간당 비용이 큼. 스팟 인스턴스 활용이나 오토스케일 0-scale로 완화 가능하지만 콜드스타트 트레이드오프 있음.
-3. **NAT Gateway** — dev부터 AZ당 1개(§4) 확정이라 시간당 과금 + 데이터 처리 비용이 처음부터 2배로 발생. S3 접근은 Gateway Endpoint(§4-1)로 우회해 데이터 처리 비용 일부는 줄인다.
-4. **RDS Multi-AZ** — dev부터 활성화(§7-1)라 인스턴스 비용이 처음부터 2배로 발생 — 기존 "prod만 Multi-AZ" 가정에서 변경됨.
+3. **NAT Gateway** — dev/prod는 AZ당 1개(§4)라 시간당 과금 + 데이터 처리 비용이 2배로 발생. local은 1개로 아낀다. S3 접근은 Gateway Endpoint(§4-1)로 우회해 데이터 처리 비용 일부는 줄인다.
+4. **RDS Multi-AZ** — dev/prod는 활성화(§7-1)라 인스턴스 비용이 2배로 발생 — 기존 "prod만 Multi-AZ" 가정에서 변경됨.
 5. **Valkey(ElastiCache)** — RDS와 별개로 상시 과금되는 노드. 최소 타입으로 시작해도 24시간 켜져 있는 비용이 누적됨.
 6. **CloudTrail/CloudWatch/VPC Flow Log 보관** — 보관 기간이 길어지거나 로그량이 많아지면 S3/CloudWatch Logs 비용이 누적되므로 수명주기 정책으로 관리.
 
@@ -142,7 +157,8 @@ Terraform 밖에서 별도로 작업할 필요는 없다 — AWS provider가 Clo
 
 다음 인터뷰 라운드에서 채워야 할 항목:
 
-- 실제 프로덕션 도메인명 (`dev.slash.example.com`은 현재 placeholder)
+- local 환경의 RDS도 NAT처럼 단일 AZ로 비용을 아낄지, 아니면 §7-1 스펙(Multi-AZ)을 그대로 쓸지 (지금은 dev/prod만 Multi-AZ로 확정, local은 미정)
+- 가비아 네임서버를 `environments/bootstrap` Route53 zone의 NS 레코드로 실제로 변경 (apply 후 `terraform output route53_name_servers` 값을 가비아 도메인 설정에 등록)
 - GPU 인스턴스 정확한 타입/개수, 예상 동시 요청 수 (Gemma 모델 크기에 따라 필요 VRAM이 달라짐)
 - `slash-nlu`의 컴퓨트 요구사항 (CPU 규모, 메모리) — Kiwi 기반이라 GPU는 불필요할 것으로 추정하나 확정 필요
 - prod 환경의 네임스페이스 분리 vs 클러스터 분리 (§11)

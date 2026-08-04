@@ -1,0 +1,5 @@
+# 실제 값으로 채운 뒤 terraform.tfvars로 복사해서 쓴다 (커밋 금지 — .gitignore 처리됨).
+# hosted_zone_id는 environments/bootstrap apply 후 `terraform output route53_zone_id`로 확인한다.
+bucket_name    = "slash-web-local"
+domain_name    = "local.sbsh.cloud"
+hosted_zone_id = "Z0000000EXAMPLE"

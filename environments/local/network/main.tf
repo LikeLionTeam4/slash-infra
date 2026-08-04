@@ -22,7 +22,7 @@ provider "aws" {
     tags = {
       Project     = "slash"
       Service     = "network"
-      Environment = "dev"
+      Environment = "local"
       ManagedBy   = "terraform"
       CostCenter  = "slash"
     }
@@ -33,7 +33,11 @@ module "network" {
   source = "../../../modules/network"
 
   name_prefix = "slash"
-  environment = "dev"
+  environment = "local"
+
+  # local은 개인 실험용이라 NAT Gateway를 1개만 둬서 비용을 아낀다.
+  # dev/prod는 모듈 기본값(AZ당 1개, docs §4)을 그대로 쓴다.
+  nat_gateway_per_az = false
 
   # 공통 태그(Project/Service/Environment/ManagedBy/CostCenter)는 위 provider의
   # default_tags가 모든 리소스에 자동으로 붙여준다 — 여기서는 리소스별 추가 태그가
