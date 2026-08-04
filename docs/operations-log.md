@@ -10,16 +10,16 @@ Apply는 이 표의 순서대로, **Destroy는 반대 순서**로 진행한다. 
 
 | # | 환경 / 모듈 | 구현 | Apply 조건 (뭐가 있어야 되는지) | Destroy 시 주의사항 |
 | --- | --- | --- | --- | --- |
-| 1 | `environments/bootstrap` | ✅ 적용됨 | 없음 — 가장 먼저 | **가장 마지막에.** `prevent_destroy` 코드에서 제거해야 destroy 가능(§5-3). zone 지우면 `sbsh.cloud` DNS 전체가 끊김 |
-| 2 | `environments/local/network` | ✅ 적용됨 | 없음 — 1번과 순서 무관, 독립적 | 지금은 특이사항 없음(§5-2). RDS/EKS가 생기면 그것들부터 먼저 지워야 함 |
+| 1 | `environments/bootstrap` | ✅ 적용됨 | 없음 — 가장 먼저 | **가장 마지막에.** `prevent_destroy` 코드에서 제거해야 destroy 가능(§5-4). zone 지우면 `sbsh.cloud` DNS 전체가 끊김 |
+| 2 | `environments/local/network` | ✅ 적용됨 | 없음 — 1번과 순서 무관, 독립적 | 4·5번(database/eks)**보다 나중에** 지워야 함(§5-2, §5-3) |
 | 3 | `environments/local/frontend` | ✅ 적용됨 | 1번의 `hosted_zone_id` 필요 | **가장 먼저.** zone 안에 이 모듈이 만든 레코드가 있어서(§5-1) — `force_destroy=true`라 버킷 비우기는 불필요 |
-| 4 | RDS + Valkey + Secrets Manager | ⬜ 미구현 | 2번의 `private_db_subnet_ids`, `db_security_group_id` 필요 | (미구현) |
+| 4 | RDS + Valkey + Secrets Manager | ✅ 코드 완료, **미적용** | 2번의 `private_db_subnet_ids`, `db_security_group_id` 필요 | 2번(network)**보다 먼저** 지워야 함(서브넷/SG 참조). local은 `deletion_protection=false`+`skip_final_snapshot=true`라 바로 destroy 가능 |
 | 5 | EKS + EC2(3대) + ECR | ✅ 코드 완료, **미적용** (비용 커서 apply는 별도 확인 후) | 2번의 `private_app_subnet_ids`, `eks_security_group_id` 필요. 4번과는 서로 독립적 | 2번(network)**보다 먼저** 지워야 함(서브넷/SG를 참조 중). ECR도 `force_delete` 안 켜놔서 이미지 있으면 비우거나 옵션 추가 필요(§4 flow_logs 버킷과 같은 패턴) |
 | 6 | ALB Ingress + API용 ACM | ⬜ 미구현 | 5번(로드밸런서 컨트롤러) + 1번(zone) 필요 | (미구현) |
 | 7 | CloudWatch + CloudTrail | ⬜ 미구현 | 계정 레벨이라 이론상 아무 때나, 모니터링 대상(4·5번) 있어야 실익 있음 | (미구현) |
 
-- **1·2번은 서로 의존이 없어서 순서를 바꾸거나 동시에 apply해도 무방**하다. 3번(frontend)부터는 1번이 먼저 끝나 있어야 하고, 5번(EKS)은 2번(network)의 서브넷·SG를 참조하므로 2번이 먼저 있어야 한다.
-- **Destroy는 표 번호의 역순이 기본**이지만, 5번은 2번을 참조하고 있어서 **2번보다 반드시 먼저** 지워야 한다(2번을 먼저 지우면 EKS 노드가 쓰던 서브넷/SG가 없어져서 실패).
+- **1·2번은 서로 의존이 없어서 순서를 바꾸거나 동시에 apply해도 무방**하다. 3번(frontend)부터는 1번이 먼저 끝나 있어야 하고, 4번(RDS+Valkey)·5번(EKS)은 둘 다 2번(network)의 서브넷·SG를 참조하므로 2번이 먼저 있어야 한다. 4번과 5번은 서로 무관 — 순서 상관없음.
+- **Destroy는 표 번호의 역순이 기본**이지만, 4·5번은 2번을 참조하고 있어서 **2번보다 반드시 먼저** 지워야 한다(2번을 먼저 지우면 RDS/EKS가 쓰던 서브넷/SG가 없어져서 실패).
 - dev/prod 환경 자체는 아직 미구축 — 계정 구조는 `docs/aws-architecture.md` §11 참고 (local은 팀원마다 다른 계정, prod는 담당자 2명이 계정 하나 공유).
 
 ## 2. 현재 적용 상태
@@ -42,6 +42,7 @@ Apply는 이 표의 순서대로, **Destroy는 반대 순서**로 진행한다. 
 | 2026-08-04 | `local/frontend` | S3+CloudFront+ACM+DNS 10개 생성 → `slash-web` 빌드 후 `aws s3 sync`로 콘텐츠 배포 | 첫 apply, 문제 없이 한 번에 완료 |
 | 2026-08-04 | `local/network` | VPC 등 38개 생성 시도 | **1차 실패** — §4 참고. 코드 수정 후 나머지 7개 재적용해서 완료 |
 | 2026-08-04 | `local/eks` | 코드 작성 + `plan` 검증(20개 리소스) | **아직 apply 안 함** — EKS 컨트롤플레인이 월 ~$75로 지금까지 중 가장 비싸서 별도 확인 후 진행 예정 |
+| 2026-08-04 | `local/database` | 코드 작성 + `plan` 검증(7개 리소스) | **아직 apply 안 함**. `aws_elasticache_cluster`는 `auth_token` 미지원이라 `aws_elasticache_replication_group`(노드 1개)으로 교체 — §4 참고 |
 | 2026-08-04 | `local/frontend` | `force_destroy = true`로 변경 적용 | AWS API 호출 없는 순수 Terraform state 변경 (§5-1 참고) |
 | 2026-08-04 | `local/frontend` | 버킷명에 계정ID 자동 접미사 적용 (`slash-web-local` → `slash-web-local-727646470302`) | S3 버킷명 전역 유일성 때문에 버킷 교체(destroy+재생성) 발생 — 재적용 후 `aws s3 sync` + CloudFront invalidation으로 콘텐츠 복구, 팀원 신규 apply는 처음부터 이 이름으로 생성되어 영향 없음 |
 
@@ -62,9 +63,22 @@ for parameter GroupDescription is invalid. Character sets beyond ASCII are not s
 - **조치**: 해당 7개 리소스의 `description`을 영문으로 교체, 원래 한글 설명은 옆에 Terraform 주석으로 보존. 재apply로 나머지 7개만 추가 생성(다른 31개는 이미 state에 있어서 안 건드림).
 - **교훈**: AWS 리소스 중 일부 필드(SG description이 대표적)는 비ASCII를 거부한다 — 사용자에게 보여줄 게 아닌 AWS API 파라미터에는 한글을 쓰지 않는다.
 
+### `aws_elasticache_cluster`는 AUTH 토큰을 지원하지 않음 (2026-08-04, `terraform validate` 단계에서 발견)
+
+```
+Error: Unsupported argument
+  on valkey.tf line 25, in resource "aws_elasticache_cluster" "main":
+  25:   auth_token = random_password.valkey_auth.result
+An argument named "auth_token" is not expected here.
+```
+
+- **원인**: `auth_token`/`transit_encryption_enabled`는 `aws_elasticache_replication_group`에만 있는 인자다. `aws_elasticache_cluster`(단일 노드 전용 리소스)는 이 필드 자체가 스키마에 없다.
+- **조치**: 노드가 1개뿐이라도(`num_cache_clusters = 1`, `automatic_failover_enabled = false`) `aws_elasticache_replication_group`으로 만들어야 AUTH 토큰을 붙일 수 있다.
+- **교훈**: ElastiCache는 "복제 그룹이냐 아니냐"보다 "AUTH/암호화가 필요하냐"가 리소스 선택 기준 — 노드 개수만 보고 `aws_elasticache_cluster`를 고르면 안 된다.
+
 ## 5. Destroy 절차
 
-destroy는 **apply의 역순**(frontend → network → bootstrap, §1 표의 3→2→1)으로 진행한다. 순서를 안 지키면 아래처럼 막힌다.
+destroy는 **apply의 역순**(frontend → database/eks → network → bootstrap, §1 표의 3→{4,5}→2→1)으로 진행한다. 순서를 안 지키면 아래처럼 막힌다.
 
 ### 5-1. `local/frontend` — 먼저
 
@@ -77,7 +91,21 @@ AWS_PROFILE=slash-local terraform plan -destroy -input=false   # 먼저 확인
 AWS_PROFILE=slash-local terraform destroy -input=false
 ```
 
-### 5-2. `local/network` — 다음
+### 5-2. `local/database`, `local/eks` — network보다 먼저 (둘은 순서 무관)
+
+- 둘 다 `network`의 서브넷·SG를 참조만 할 뿐 서로는 무관해서, 이 둘 사이의 순서는 상관없다. 단 **`network`보다는 반드시 먼저** 지워야 한다.
+- `local/database`: `deletion_protection=false`, `skip_final_snapshot=true`로 오버라이드해뒀으니 바로 `terraform destroy` 가능(dev/prod는 모듈 기본값이 둘 다 반대라 destroy가 안전장치에 막힘 — 의도된 동작).
+- `local/eks`: ECR 리포지토리에 이미지가 쌓여 있으면 `force_delete`를 안 켜놔서 실패할 수 있다(§4 flow_logs 버킷과 같은 패턴) — 그때는 리포지토리를 비우거나 모듈에 `force_delete = true`를 추가.
+
+```bash
+cd environments/local/database
+AWS_PROFILE=slash-local terraform destroy -input=false
+
+cd ../eks
+AWS_PROFILE=slash-local terraform destroy -input=false
+```
+
+### 5-3. `local/network` — 다음
 
 - 지금은 특별한 조치 불필요. 단 `flow_logs` 버킷(`slash-vpc-flow-logs-local-...`)에 `force_destroy`가 없어서, 로그가 쌓인 뒤에 지우려면 그때는 버킷을 먼저 비우거나 모듈에 `force_destroy`를 추가해야 함 (2026-08-04 기준 오브젝트 0개라 지금은 문제 없음).
 
@@ -87,7 +115,7 @@ AWS_PROFILE=slash-local terraform plan -destroy -input=false
 AWS_PROFILE=slash-local terraform destroy -input=false
 ```
 
-### 5-3. `bootstrap` — 마지막
+### 5-4. `bootstrap` — 마지막
 
 - `aws_s3_bucket.tfstate`에 `lifecycle { prevent_destroy = true }`가 걸려있어 **Terraform이 destroy 요청 자체를 거부**한다. 지우려면 `environments/bootstrap/main.tf`에서 이 lifecycle 블록을 코드에서 먼저 삭제해야 함 (별도 apply 없이, destroy 시점 코드에만 없으면 됨).
 - state 버킷은 아직 어떤 환경도 S3 backend로 옮기지 않아서 오브젝트 0개 — 비우는 문제는 없음.
