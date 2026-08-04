@@ -120,14 +120,14 @@ terraform {
      zone 하나만 가리킨다) **영원히 검증되지 않고 apply가 멈춘다.**
    - 그래서 실제로 테스트하려면: (a) 본인이 소유하고 위임 가능한 다른 도메인으로 `domain_name`을
      바꾸거나, (b) 이 모듈은 건너뛰고 `network`까지만 연습하는 것을 권장.
-5. **destroy는 [docs/operations-log.md](docs/operations-log.md) §4의 순서**(frontend → network → bootstrap)를
+5. **destroy는 [docs/operations-log.md](docs/operations-log.md) §5의 순서**(frontend → network → bootstrap)를
    본인 계정 안에서 그대로 따르면 된다 — 계정이 다르니 다른 사람 리소스에 영향 없음.
 
 ## 아키텍처
 
 전체 AWS 인프라 설계(네트워크, EKS, RDS, CI/CD 등)는 [docs/aws-architecture.md](docs/aws-architecture.md) 참고.
 
-실제로 뭘 적용했는지, destroy는 어떤 순서로 해야 하는지는 [docs/operations-log.md](docs/operations-log.md) 참고 — 계속 갱신되는 운영 기록.
+**Terraform apply/destroy 순서와 구현된 것/안 된 것 전체 표**는 [docs/operations-log.md §1](docs/operations-log.md#1-전체-순서--구현-상태-한눈에-보기) 참고 — 계속 갱신되는 운영 기록.
 
 ## 관련 저장소
 
