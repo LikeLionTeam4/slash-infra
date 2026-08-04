@@ -25,6 +25,8 @@ provider "aws" {
   region = "us-east-1"
 }
 
+data "aws_caller_identity" "current" {}
+
 module "frontend_hosting" {
   source = "../../../modules/frontend-hosting"
 
@@ -33,7 +35,9 @@ module "frontend_hosting" {
     aws.us_east_1 = aws.us_east_1
   }
 
-  bucket_name    = var.bucket_name
+  # 계정ID를 자동으로 붙여서 팀원마다(=계정마다) 버킷 이름이 자동으로 달라지게 한다 —
+  # S3 버킷명은 전역 유일해야 해서, 사람이 직접 안 바꿔도 충돌이 안 나도록.
+  bucket_name    = "${var.bucket_name}-${data.aws_caller_identity.current.account_id}"
   domain_name    = var.domain_name
   hosted_zone_id = var.hosted_zone_id
 
