@@ -14,11 +14,12 @@ Apply는 이 표의 순서대로, **Destroy는 반대 순서**로 진행한다. 
 | 2 | `environments/local/network` | ✅ 적용됨 | 없음 — 1번과 순서 무관, 독립적 | 지금은 특이사항 없음(§5-2). RDS/EKS가 생기면 그것들부터 먼저 지워야 함 |
 | 3 | `environments/local/frontend` | ✅ 적용됨 | 1번의 `hosted_zone_id` 필요 | **가장 먼저.** zone 안에 이 모듈이 만든 레코드가 있어서(§5-1) — `force_destroy=true`라 버킷 비우기는 불필요 |
 | 4 | RDS + Valkey + Secrets Manager | ⬜ 미구현 | 2번의 `private_db_subnet_ids`, `db_security_group_id` 필요 | (미구현) |
-| 5 | EKS + EC2(3대) + ECR | ⬜ 미구현 | 2번의 `private_app_subnet_ids`, `eks_security_group_id` 필요. 4번과는 서로 독립적 | (미구현) |
+| 5 | EKS + EC2(3대) + ECR | ✅ 코드 완료, **미적용** (비용 커서 apply는 별도 확인 후) | 2번의 `private_app_subnet_ids`, `eks_security_group_id` 필요. 4번과는 서로 독립적 | 2번(network)**보다 먼저** 지워야 함(서브넷/SG를 참조 중). ECR도 `force_delete` 안 켜놔서 이미지 있으면 비우거나 옵션 추가 필요(§4 flow_logs 버킷과 같은 패턴) |
 | 6 | ALB Ingress + API용 ACM | ⬜ 미구현 | 5번(로드밸런서 컨트롤러) + 1번(zone) 필요 | (미구현) |
 | 7 | CloudWatch + CloudTrail | ⬜ 미구현 | 계정 레벨이라 이론상 아무 때나, 모니터링 대상(4·5번) 있어야 실익 있음 | (미구현) |
 
-- **1·2번은 서로 의존이 없어서 순서를 바꾸거나 동시에 apply해도 무방**하다. 3번(frontend)부터는 1번이 먼저 끝나 있어야 한다.
+- **1·2번은 서로 의존이 없어서 순서를 바꾸거나 동시에 apply해도 무방**하다. 3번(frontend)부터는 1번이 먼저 끝나 있어야 하고, 5번(EKS)은 2번(network)의 서브넷·SG를 참조하므로 2번이 먼저 있어야 한다.
+- **Destroy는 표 번호의 역순이 기본**이지만, 5번은 2번을 참조하고 있어서 **2번보다 반드시 먼저** 지워야 한다(2번을 먼저 지우면 EKS 노드가 쓰던 서브넷/SG가 없어져서 실패).
 - dev/prod 환경 자체는 아직 미구축 — 계정 구조는 `docs/aws-architecture.md` §11 참고 (local은 팀원마다 다른 계정, prod는 담당자 2명이 계정 하나 공유).
 
 ## 2. 현재 적용 상태
@@ -40,6 +41,7 @@ Apply는 이 표의 순서대로, **Destroy는 반대 순서**로 진행한다. 
 | 2026-08-04 | `bootstrap` | state 버킷 + `sbsh.cloud` Route53 zone 생성 | 가비아 네임서버를 output의 `route53_name_servers` 4개로 변경, 전파 확인 후 진행 |
 | 2026-08-04 | `local/frontend` | S3+CloudFront+ACM+DNS 10개 생성 → `slash-web` 빌드 후 `aws s3 sync`로 콘텐츠 배포 | 첫 apply, 문제 없이 한 번에 완료 |
 | 2026-08-04 | `local/network` | VPC 등 38개 생성 시도 | **1차 실패** — §4 참고. 코드 수정 후 나머지 7개 재적용해서 완료 |
+| 2026-08-04 | `local/eks` | 코드 작성 + `plan` 검증(20개 리소스) | **아직 apply 안 함** — EKS 컨트롤플레인이 월 ~$75로 지금까지 중 가장 비싸서 별도 확인 후 진행 예정 |
 | 2026-08-04 | `local/frontend` | `force_destroy = true`로 변경 적용 | AWS API 호출 없는 순수 Terraform state 변경 (§5-1 참고) |
 | 2026-08-04 | `local/frontend` | 버킷명에 계정ID 자동 접미사 적용 (`slash-web-local` → `slash-web-local-727646470302`) | S3 버킷명 전역 유일성 때문에 버킷 교체(destroy+재생성) 발생 — 재적용 후 `aws s3 sync` + CloudFront invalidation으로 콘텐츠 복구, 팀원 신규 apply는 처음부터 이 이름으로 생성되어 영향 없음 |
 

@@ -64,18 +64,21 @@ Slash 프로젝트 전체(웹 프론트엔드 제외 백엔드 서비스군)를 
 
 ## 5. EKS 클러스터
 
-- 클러스터 1개 (`slash-eks-dev`), private-app 서브넷에 워커 노드 배치.
-- 초기 범용 노드그룹은 EC2 3대(AZ당 여유 있게 분산, 온디맨드)로 시작 — 클러스터 자체를 아직 만들기 전 단계에서는 이 3대를 EKS에 조인 가능한 형태(같은 private-app 서브넷 + EKS SG)로만 우선 준비하고, 실제 노드그룹 등록은 EKS 컨트롤플레인 모듈 작업 시점에 맞춘다.
-- 노드그룹 2종(중기):
-  - **범용 노드그룹** — `slash-api`, `slash-nlu`, ArgoCD, 기타 클러스터 애드온용. 온디맨드, 오토스케일링 (최소/최대는 실사용 부하 보고 결정). 위 3대가 이 그룹의 시작점.
-  - **GPU 노드그룹** — `slash-llm`(Gemma 추론) 전용. `g4dn.xlarge` 또는 `g5.xlarge` 계열로 시작, NVIDIA device plugin 필요. 상시 켜두면 비용이 크므로 오토스케일링(0으로 축소 가능한 구성)을 강하게 권장 — 콜드스타트(모델 로딩 시간)와 비용의 트레이드오프는 실제 트래픽 패턴을 보고 조정.
+`modules/eks`로 구현 완료 (범용 노드그룹 + ECR까지, PH-03의 1차 조각). GPU 노드그룹과 Karpenter 실제 설치는 다음 조각.
+
+- 클러스터 1개 (`slash-eks-<env>`), private-app 서브넷에 워커 노드 배치. 버전은 명시하지 않고 AWS 기본값(그 시점 최신 지원 버전) 사용.
+- 범용 노드그룹 EC2 3대(desired=3, min=2, max=4)로 시작 — 온디맨드, `network` 모듈의 `eks_security_group_id`를 launch template으로 명시 부착(EKS가 기본 생성하는 SG 대신 우리가 설계한 self-referencing SG를 쓰기 위해). 노드 IAM Role은 최소 권한(Worker/CNI/ECR ReadOnly/SSM)만 부여 — SSH 키 없이 SSM 세션으로 접속.
+- **GPU 노드그룹(`slash-llm`용)은 다음 조각으로 미룸** — 인스턴스 타입/개수 아직 미정(§13).
 - IRSA 활성화 — 클러스터 생성 시 AWS가 발급하는 클러스터 전용 OIDC 발급자를 `aws_iam_openid_connect_provider`로 등록해서, 파드가 자기 ServiceAccount 신원으로 IAM Role을 빌려쓸 수 있게 한다(§7-1의 Secrets Manager 접근이 이 경로를 씀). GitHub Actions용 OIDC provider(§9-1)와는 별개의 리소스.
-- 클러스터 오토스케일러 또는 Karpenter 중 하나를 붙인다 (Karpenter가 GPU/스팟 혼합 노드 관리에 더 유연하므로 우선 후보).
+- **오토스케일러는 Karpenter로 확정.** 단 이번 조각에는 컨트롤러용 IRSA Role(`karpenter_controller_role_arn`)만 준비 — Karpenter 자체(Helm 설치, NodePool/EC2NodeClass CRD)는 K8s 내부 리소스라 GitOps로 별도 설치. 노드에 붙일 인스턴스 프로필은 범용 노드그룹과 동일한 Role을 재사용.
+- ALB Ingress Controller(§8)도 같은 이유로 이번 조각엔 없음 — Helm 설치는 GitOps, IRSA Role은 그 조각에서 준비.
 
 ## 6. 컨테이너 레지스트리
 
-- 서비스별 ECR 리포지토리: `slash-api`, `slash-nlu`, `slash-llm`.
-- 이미지 태그는 커밋 SHA 기준, 수명주기 정책으로 오래된 이미지 자동 정리.
+`modules/eks`에 구현 완료.
+
+- 서비스별 ECR 리포지토리: `slash-api`, `slash-nlu`, `slash-llm`. `image_tag_mutability = IMMUTABLE` — 커밋 SHA 태그는 절대 안 바뀌니 덮어쓰기 자체를 막아둠.
+- 수명주기 정책: 태그 없는 이미지는 7일 후, 태그 있는 건 최근 10개만 남기고 자동 정리.
 
 ## 7. 데이터베이스
 

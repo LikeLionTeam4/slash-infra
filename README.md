@@ -6,11 +6,13 @@ Slash AWS 인프라. 역할별 재사용 모듈(`modules/`)과 이를 조합하�
 modules/
   frontend-hosting/  # S3 + CloudFront + ACM + Route53 — 정적 프론트엔드 호스팅
   network/           # VPC + 3-tier 서브넷 + SG(EKS/DB) + S3 Gateway Endpoint + VPC Flow Log
+  eks/               # EKS 클러스터 + 범용 노드그룹 + IRSA(OIDC) + Karpenter Role + ECR
 environments/
   bootstrap/          # 모든 환경이 공유하는 state용 S3 버킷 + Route53 hosted zone (최초 1회만 apply)
   local/              # 개인 맥북에서 배포하는 실험용 환경
     frontend/         # frontend-hosting 모듈을 local 값으로 조합
     network/          # network 모듈을 local 값으로 조합 (NAT 1개로 비용 절감)
+    eks/              # eks 모듈을 local 값으로 조합 (아직 미적용 — 비용 커서 별도 확인 후 apply)
   dev/                # prod와 거의 동일한 스펙을 유지하는 공유 테스트 서버 (아직 미구축)
   prod/               # 실제 운영 환경 (아직 미구축)
 ```
@@ -49,8 +51,12 @@ terraform plan   # 유효한 AWS 자격증명 필요 (aws sts get-caller-identit
 `docs/aws-architecture.md`에 설계는 정리되어 있지만 아직 모듈이 없는 부분:
 
 - RDS PostgreSQL(§7-1) + Valkey/ElastiCache(§7-2) — `network` 모듈이 만든 `private_db_subnet_ids`, `db_security_group_id`를 그대로 사용
-- EKS 컨트롤플레인 + 초기 EC2 3대(§5) — `network` 모듈의 `private_app_subnet_ids`, `eks_security_group_id` 사용
+- GPU 노드그룹(`slash-llm`용, §5) — 범용 노드그룹은 `eks` 모듈로 구현 완료, GPU는 인스턴스 타입/개수 미정
+- Karpenter 실제 설치(Helm, NodePool/EC2NodeClass) + ALB Ingress Controller 설치(§8) — 둘 다 IRSA Role은 `eks` 모듈에 준비돼 있지만, 컨트롤러 자체는 K8s 내부 리소스라 GitOps로 별도 설치
 - API용 ALB Ingress + ACM(§8)
+
+`environments/local/eks`는 코드 작성 + `plan` 검증(20개 리소스)까지 끝났지만 **아직 apply 안 함** —
+EKS 컨트롤플레인이 월 ~$75로 지금까지 중 가장 비싸서 신중하게 진행 중 ([docs/operations-log.md](docs/operations-log.md) 참고).
 
 ## State 백엔드 + DNS 부트스트랩 (최초 1회)
 

@@ -1,0 +1,13 @@
+# 실제 값으로 채운 뒤 terraform.tfvars로 복사해서 쓴다 (커밋 금지 — .gitignore 처리됨).
+# 아래 세 값은 environments/local/network에서 `terraform output`으로 확인한다.
+# private_app_subnet_ids는 output이 { "ap-northeast-2a" = "...", "ap-northeast-2c" = "..." }
+# 형태(map)로 나오니, 그 값 2개를 리스트로 옮겨 적는다.
+
+vpc_id = "vpc-0000000000000000"
+
+private_app_subnet_ids = [
+  "subnet-0000000000000000", # ap-northeast-2a
+  "subnet-0000000000000000", # ap-northeast-2c
+]
+
+eks_security_group_id = "sg-0000000000000000"
