@@ -136,16 +136,16 @@ Slash 프로젝트 전체(웹 프론트엔드 제외 백엔드 서비스군)를 
 
 ## 10. 옵저버빌리티 (CloudWatch / CloudTrail)
 
-Terraform 밖에서 별도로 작업할 필요는 없다 — AWS provider가 CloudWatch/CloudTrail 리소스를 그대로 지원하므로 다른 모듈과 동일하게 관리한다.
+Terraform 밖에서 별도로 작업할 필요는 없다 — AWS provider가 CloudWatch/CloudTrail 리소스를 그대로 지원하므로 다른 모듈과 동일하게 관리한다. **CloudTrail은 `environments/bootstrap`, CloudWatch 알람은 `modules/observability`(환경별)로 구현 완료** — 둘의 위치가 다른 이유는 아래 참고.
 
-- **CloudWatch**
-  - EKS/RDS는 기본적으로 CloudWatch에 지표를 보낸다. 여기에 서비스별 로그 그룹(`aws_cloudwatch_log_group`, 예: `/eks/slash-api-dev`)을 만들어 애플리케이션 로그를 모은다.
-  - 핵심 알람(`aws_cloudwatch_metric_alarm`)을 최소한으로 먼저: RDS CPU/스토리지, GPU 노드 사용률, ALB 5xx 비율.
-  - 로그 그룹에는 §2의 공통 태그를 그대로 붙인다.
-- **CloudTrail**
-  - 계정 전체 API 호출 감사용으로 트레일 1개(`aws_cloudtrail`)를 만들고, 로그는 전용 S3 버킷(버저닝 + 수명주기 정책으로 오래된 로그 자동 정리/Glacier 이전)에 적재.
-  - dev 단계에서는 단일 리전 트레일로 충분, 계정이 여러 개로 늘어나면 organization trail 전환을 고려.
-- 두 서비스 모두 "공통 기반" 모듈(§3 state 관리, §4 네트워크와 같은 위치)에 넣어서 서비스별 모듈이 아니라 한 번만 구성한다.
+- **CloudWatch** (`modules/observability`, PH-05 1차 조각)
+  - RDS CPU 사용률(80% 초과)·여유 스토리지(2GB 미만) 알람 2개 + 알림용 SNS 토픽. `alarm_email` 변수로 이메일 구독 선택 가능.
+  - **ALB 5xx 비율, GPU 노드 사용률 알람은 이번 조각에 없다** — ALB Ingress·GPU 노드그룹 자체가 아직 없어서(§8, §5) 감시할 대상이 없음. 그것들이 생기면 이 모듈에 추가.
+  - 애플리케이션 로그 그룹(`aws_cloudwatch_log_group`, 예: `/eks/slash-api-dev`)은 아직 안 만듦 — 실제로 로그를 그 그룹에 밀어넣으려면 Fluent Bit 같은 로그 수집 에이전트가 클러스터 안에서 돌아야 하는데, 그 설치는 ALB Controller/Karpenter와 같은 이유로 GitOps 몫이라 로그 그룹만 먼저 만들어봐야 실익이 적어 미룸.
+- **CloudTrail** (`environments/bootstrap`)
+  - 계정 전체 API 호출 감사용으로 트레일 1개(`aws_cloudtrail`)를 만들고, 로그는 전용 S3 버킷(버저닝 + 수명주기 정책, 잠정 90일 후 만료)에 적재.
+  - **왜 환경별 모듈이 아니라 bootstrap에 두나**: CloudTrail은 계정 전체를 감사하는 거라 local/dev/prod가 각자 만들면 같은 계정 안에 트레일이 중복된다 — state 버킷·Route53 zone처럼 "계정당 한 번만" 만드는 자원이라 bootstrap이 자연스러운 자리. 반대로 CloudWatch 알람은 특정 환경의 RDS/EKS를 가리켜야 해서 환경별로 필요.
+  - 단일 리전 트레일로 충분, 계정이 여러 개로 늘어나면 organization trail 전환을 고려.
 
 ## 11. 환경 전략
 
@@ -185,6 +185,7 @@ local/dev/prod 3단계로 나눈다. **계정 공유 여부는 환경마다 다�
 - `slash-nlu`의 컴퓨트 요구사항 (CPU 규모, 메모리) — Kiwi 기반이라 GPU는 불필요할 것으로 추정하나 확정 필요
 - prod 환경의 네임스페이스 분리 vs 클러스터 분리 (§11)
 - Helm chart를 slash-infra 내부에 둘지, 별도 저장소로 분리할지
-- CloudTrail 로그 보관 기간, CloudWatch 알람의 실제 임계값(트래픽 실측 후 결정)
+- CloudTrail 로그 보관 기간(지금은 90일 잠정 기본값), CloudWatch 알람의 실제 임계값(지금은 CPU 80%/스토리지 2GB 잠정값) — 트래픽 실측 후 조정
+- ALB Ingress·GPU 노드그룹이 생기면 그 알람(5xx 비율, GPU 사용률)을 `modules/observability`에 추가
 - `Owner` 태그를 지금부터 붙일지, 팀이 나뉘는 시점부터 붙일지
 - Valkey(ElastiCache) 정확한 노드 타입/개수 (§7-2, 캐시 대상 데이터와 세션 규모 확정 후)

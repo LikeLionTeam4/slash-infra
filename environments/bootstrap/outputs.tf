@@ -16,3 +16,11 @@ output "route53_name_servers" {
   description = "가비아 등 등록기관에 네임서버로 등록할 NS 레코드 4개."
   value       = aws_route53_zone.root.name_servers
 }
+
+output "cloudtrail_bucket_name" {
+  value = aws_s3_bucket.cloudtrail.id
+}
+
+output "cloudtrail_arn" {
+  value = aws_cloudtrail.main.arn
+}

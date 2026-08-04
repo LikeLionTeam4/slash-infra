@@ -1,0 +1,7 @@
+# 실제 값으로 채운 뒤 terraform.tfvars로 복사해서 쓴다 (커밋 금지 — .gitignore 처리됨).
+# rds_instance_id는 environments/local/database에서 `terraform output rds_instance_id`로 확인한다.
+
+rds_instance_id = "slash-rds-local"
+
+# 선택 사항 — 넣으면 SNS 이메일 구독이 생기고, 실제 받은 편지함에서 구독 확인(Confirm) 링크를 눌러야 활성화된다.
+# alarm_email = "you@example.com"

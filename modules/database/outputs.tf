@@ -2,6 +2,11 @@ output "rds_endpoint" {
   value = aws_db_instance.main.endpoint
 }
 
+output "rds_instance_id" {
+  description = "CloudWatch 알람의 DBInstanceIdentifier 차원에 쓰는 식별자"
+  value       = aws_db_instance.main.id
+}
+
 output "rds_master_user_secret_arn" {
   description = "RDS가 자동 생성한 마스터 비밀번호 Secrets Manager ARN — slash-api가 IRSA로 읽어야 함"
   value       = aws_db_instance.main.master_user_secret[0].secret_arn
