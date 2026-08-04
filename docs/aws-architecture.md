@@ -140,13 +140,13 @@ Terraform 밖에서 별도로 작업할 필요는 없다 — AWS provider가 Clo
 
 ## 11. 환경 전략
 
-local/dev/prod 3단계로 나눈다. 계정은 하나(§2)를 공유하고, 아래 순서대로 구축한다.
+local/dev/prod 3단계로 나눈다. **계정 공유 여부는 환경마다 다르다** — §2의 "계정은 하나"는 한 사람이 local/dev/prod를 전부 적용할 때 얘기고, 실제로는 아래처럼 갈린다.
 
-| 환경 | 역할 | 스펙 | 상태 |
-| --- | --- | --- | --- |
-| **local** | 개인 맥북에서 `terraform apply`하는 실험용 — 모듈 변경을 실제 AWS에서 검증 | 최소 구성 (`environments/local/*` 그대로) | `network`/`frontend` 구축, RDS/EKS는 다음 단계 |
-| **dev** | prod와 거의 동일한 스펙을 유지하는 공유 테스트 서버 — 팀 전체가 QA에 사용 | prod와 동일 모듈, 동일 값(인스턴스 크기 등) | 미구축 — local이 안정화된 뒤 착수 |
-| **prod** | 실제 운영 환경 | Multi-AZ, 가용성 우선 | 미구축 |
+| 환경 | 역할 | 스펙 | 계정 | 상태 |
+| --- | --- | --- | --- | --- |
+| **local** | 개인 맥북에서 `terraform apply`하는 실험용 — 모듈 변경을 실제 AWS에서 검증 | 최소 구성 (`environments/local/*` 그대로) | **팀원마다 다른 계정** (부트캠프 계정이 개인별 발급) — 서로 공유·의존 없이 각자 독립 적용. 자세한 건 [README §다른 AWS 계정에서 시작하기](../README.md#다른-aws-계정에서-시작하기-팀원용) | `network`/`frontend` 구축, RDS/EKS는 다음 단계 |
+| **dev** | prod와 거의 동일한 스펙을 유지하는 공유 테스트 서버 — 팀 전체가 QA에 사용 | prod와 동일 모듈, 동일 값(인스턴스 크기 등) | 미정 — 착수 시 결정 | 미구축 — local이 안정화된 뒤 착수 |
+| **prod** | 실제 운영 환경 | Multi-AZ, 가용성 우선 | **인프라 담당자 2명이 계정 하나를 공유**. 코스가 2026-09-04까지라 별도 신규 계정은 안 만들고, 두 담당자 중 한 명의 (부트캠프) 계정을 골라 그 안에 나머지 한 명의 IAM 사용자를 추가하는 방식 — 착수 시 어느 쪽 계정으로 할지만 정하면 됨 | 미구축 |
 
 - local에서 검증된 모듈을 그대로 dev/prod에 재사용한다 — 모듈 코드 자체는 세 환경이 동일하고, `environments/<env>/` root의 변수 값만 다르다.
 - local이 dev/prod와 값만 다른 게 아니라 **아예 빠지는 것도 있다**: NAT Gateway는 local만 1개(§4), RDS Multi-AZ는 dev/prod만 활성화(§7-1), **CI/CD 파이프라인(GitHub Actions + ArgoCD, §9)은 dev부터만 적용**하고 local은 수동 배포로 충분하다.
@@ -170,7 +170,7 @@ local/dev/prod 3단계로 나눈다. 계정은 하나(§2)를 공유하고, 아�
 다음 인터뷰 라운드에서 채워야 할 항목:
 
 - local 환경의 RDS도 NAT처럼 단일 AZ로 비용을 아낄지, 아니면 §7-1 스펙(Multi-AZ)을 그대로 쓸지 (지금은 dev/prod만 Multi-AZ로 확정, local은 미정)
-- 가비아 네임서버를 `environments/bootstrap` Route53 zone의 NS 레코드로 실제로 변경 (apply 후 `terraform output route53_name_servers` 값을 가비아 도메인 설정에 등록)
+- dev 환경의 계정 구조 — local처럼 팀원 각자 다른 계정에서 독립 적용할지, prod처럼 담당자 몇 명이 계정 하나를 공유할지 (§11, 착수 시 결정)
 - GPU 인스턴스 정확한 타입/개수, 예상 동시 요청 수 (Gemma 모델 크기에 따라 필요 VRAM이 달라짐)
 - `slash-nlu`의 컴퓨트 요구사항 (CPU 규모, 메모리) — Kiwi 기반이라 GPU는 불필요할 것으로 추정하나 확정 필요
 - prod 환경의 네임스페이스 분리 vs 클러스터 분리 (§11)
