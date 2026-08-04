@@ -91,6 +91,8 @@ terraform {
 
 전체 AWS 인프라 설계(네트워크, EKS, RDS, CI/CD 등)는 [docs/aws-architecture.md](docs/aws-architecture.md) 참고.
 
+실제로 뭘 적용했는지, destroy는 어떤 순서로 해야 하는지는 [docs/operations-log.md](docs/operations-log.md) 참고 — 계속 갱신되는 운영 기록.
+
 ## 관련 저장소
 
 | 저장소 | 역할 |
