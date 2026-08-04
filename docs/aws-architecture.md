@@ -64,31 +64,39 @@ Slash 프로젝트 전체(웹 프론트엔드 제외 백엔드 서비스군)를 
 
 ## 5. EKS 클러스터
 
-- 클러스터 1개 (`slash-eks-dev`), private-app 서브넷에 워커 노드 배치.
-- 초기 범용 노드그룹은 EC2 3대(AZ당 여유 있게 분산, 온디맨드)로 시작 — 클러스터 자체를 아직 만들기 전 단계에서는 이 3대를 EKS에 조인 가능한 형태(같은 private-app 서브넷 + EKS SG)로만 우선 준비하고, 실제 노드그룹 등록은 EKS 컨트롤플레인 모듈 작업 시점에 맞춘다.
-- 노드그룹 2종(중기):
-  - **범용 노드그룹** — `slash-api`, `slash-nlu`, ArgoCD, 기타 클러스터 애드온용. 온디맨드, 오토스케일링 (최소/최대는 실사용 부하 보고 결정). 위 3대가 이 그룹의 시작점.
-  - **GPU 노드그룹** — `slash-llm`(Gemma 추론) 전용. `g4dn.xlarge` 또는 `g5.xlarge` 계열로 시작, NVIDIA device plugin 필요. 상시 켜두면 비용이 크므로 오토스케일링(0으로 축소 가능한 구성)을 강하게 권장 — 콜드스타트(모델 로딩 시간)와 비용의 트레이드오프는 실제 트래픽 패턴을 보고 조정.
+`modules/eks`로 구현 완료 (범용 노드그룹 + ECR까지, PH-03의 1차 조각). GPU 노드그룹과 Karpenter 실제 설치는 다음 조각.
+
+- 클러스터 1개 (`slash-eks-<env>`), private-app 서브넷에 워커 노드 배치. 버전은 명시하지 않고 AWS 기본값(그 시점 최신 지원 버전) 사용.
+- 범용 노드그룹 EC2 3대(desired=3, min=2, max=4)로 시작 — 온디맨드, `network` 모듈의 `eks_security_group_id`를 launch template으로 명시 부착(EKS가 기본 생성하는 SG 대신 우리가 설계한 self-referencing SG를 쓰기 위해). 노드 IAM Role은 최소 권한(Worker/CNI/ECR ReadOnly/SSM)만 부여 — SSH 키 없이 SSM 세션으로 접속.
+- **GPU 노드그룹(`slash-llm`용)은 다음 조각으로 미룸** — 인스턴스 타입/개수 아직 미정(§13).
 - IRSA 활성화 — 클러스터 생성 시 AWS가 발급하는 클러스터 전용 OIDC 발급자를 `aws_iam_openid_connect_provider`로 등록해서, 파드가 자기 ServiceAccount 신원으로 IAM Role을 빌려쓸 수 있게 한다(§7-1의 Secrets Manager 접근이 이 경로를 씀). GitHub Actions용 OIDC provider(§9-1)와는 별개의 리소스.
-- 클러스터 오토스케일러 또는 Karpenter 중 하나를 붙인다 (Karpenter가 GPU/스팟 혼합 노드 관리에 더 유연하므로 우선 후보).
+- **오토스케일러는 Karpenter로 확정.** 단 이번 조각에는 컨트롤러용 IRSA Role(`karpenter_controller_role_arn`)만 준비 — Karpenter 자체(Helm 설치, NodePool/EC2NodeClass CRD)는 K8s 내부 리소스라 GitOps로 별도 설치. 노드에 붙일 인스턴스 프로필은 범용 노드그룹과 동일한 Role을 재사용.
+- ALB Ingress Controller(§8)도 같은 이유로 이번 조각엔 없음 — Helm 설치는 GitOps, IRSA Role은 그 조각에서 준비.
 
 ## 6. 컨테이너 레지스트리
 
-- 서비스별 ECR 리포지토리: `slash-api`, `slash-nlu`, `slash-llm`.
-- 이미지 태그는 커밋 SHA 기준, 수명주기 정책으로 오래된 이미지 자동 정리.
+`modules/eks`에 구현 완료.
+
+- 서비스별 ECR 리포지토리: `slash-api`, `slash-nlu`, `slash-llm`. `image_tag_mutability = IMMUTABLE` — 커밋 SHA 태그는 절대 안 바뀌니 덮어쓰기 자체를 막아둠.
+- 수명주기 정책: 태그 없는 이미지는 7일 후, 태그 있는 건 최근 10개만 남기고 자동 정리.
 
 ## 7. 데이터베이스
 
+`modules/database`로 구현 완료 (RDS + Valkey + Secrets Manager, PH-02).
+
 ### 7-1. RDS PostgreSQL
 
-인스턴스 1개, DB 2개(`slash_dev`, `slash_demo`)로 분리하는 구성을 dev 단계부터 그대로 쓴다. **Multi-AZ는 dev/prod부터 활성화**한다(§1의 "가용성·확장성 우선" 예산 전제를 따름) — local은 §4의 NAT와 같은 이유로 단일 AZ로 비용을 아낄지 아직 미확정, §13 TODO 참고.
+인스턴스 1개, DB 2개(`slash_dev`, `slash_demo`)로 분리하는 구성을 dev 단계부터 그대로 쓴다. **Multi-AZ는 dev/prod부터 활성화**한다(§1의 "가용성·확장성 우선" 예산 전제를 따름) — **local은 NAT(§4)와 같은 이유로 단일 AZ로 확정**해서 §13의 미결정 항목을 해소했다(`environments/local/database`에서 `rds_multi_az = false`로 오버라이드, 모듈 기본값은 dev/prod에 맞춰 `true`).
+
+- 마스터 비밀번호는 직접 만들지 않고 `manage_master_user_password = true`로 RDS가 자동 생성·로테이션까지 관리하는 Secrets Manager 시크릿을 쓴다 — 아래 "자격증명은 Secrets Manager로 관리"의 실제 구현.
+- **DB 2개 분리는 Terraform이 전부 처리하지 못한다.** `db_name`으로 인스턴스 생성 시 첫 번째 DB(`slash_dev`)는 자동으로 생기지만, 두 번째 DB(`slash_demo`)는 실제 SQL(`CREATE DATABASE`)로 만들어야 하는데, RDS가 private-db 서브넷(인터넷 기본 경로 없음)에 있어서 **노트북에서 실행하는 Terraform은 애초에 그 인스턴스에 접속할 수 없다.** SSM 포트포워딩이나 EKS 안에서 도는 일회성 Job으로 만들어야 한다 — §13 TODO에 추가.
 
 | 항목 | 값 | 비고 |
 | --- | --- | --- |
 | 엔진 | PostgreSQL 16 이상 | `gen_random_uuid()` 내장, `pgcrypto` 확장 불필요 |
 | 인스턴스 클래스 | `db.t4g.small` (최소 `db.t4g.micro`) | Graviton, 시연 규모 부하에 충분 |
 | 스토리지 | gp3 20GB + 오토스케일링 | 최소치로 시작, 스토리지 오토스케일링으로 여유 확보 |
-| Multi-AZ | 활성 | dev/prod 공통 |
+| Multi-AZ | 활성 (local만 비활성) | dev/prod 공통, local은 비용 절감 위해 단일 AZ |
 | 배치 위치 | private-db 서브넷 (§4) | 인터넷 기본 경로 없음 |
 | 퍼블릭 액세스 | 비활성 | 인바운드는 EKS SG에서만 (§4-1 DB SG) |
 | 자동 백업 | 7일 | |
@@ -100,7 +108,8 @@ Slash 프로젝트 전체(웹 프론트엔드 제외 백엔드 서비스군)를 
 
 - 캐시/세션 레이어로 ElastiCache **Valkey**를 사용한다 (Redis OSS 포크, 라이선스 이슈 없이 호환).
 - private-db 서브넷에 배치, DB SG와 동일한 원칙으로 EKS SG에서만 인바운드 허용.
-- 접근 정보(엔드포인트, 필요 시 AUTH 토큰)도 RDS와 동일하게 Secrets Manager로 관리.
+- AUTH 토큰이 필요해서 `aws_elasticache_cluster`(단일 노드용, AUTH 미지원)가 아니라 `aws_elasticache_replication_group`을 쓴다 — 노드 1개(`num_cache_clusters = 1`, failover 대상 없음)라도 이 리소스여야 `transit_encryption_enabled`+`auth_token`이 붙는다.
+- AUTH 토큰은 RDS처럼 자동 관리 기능이 없어서 `random_password`로 직접 생성해 Secrets Manager에 저장(엔드포인트·포트와 함께).
 - 초기 규모는 시연 부하 기준 최소 노드 타입(`cache.t4g.micro`)으로 시작 — 정확한 사이징은 실사용 트래픽 확인 후 조정 (§13 TODO).
 
 ## 8. 인그레스 & 도메인
@@ -127,16 +136,16 @@ Slash 프로젝트 전체(웹 프론트엔드 제외 백엔드 서비스군)를 
 
 ## 10. 옵저버빌리티 (CloudWatch / CloudTrail)
 
-Terraform 밖에서 별도로 작업할 필요는 없다 — AWS provider가 CloudWatch/CloudTrail 리소스를 그대로 지원하므로 다른 모듈과 동일하게 관리한다.
+Terraform 밖에서 별도로 작업할 필요는 없다 — AWS provider가 CloudWatch/CloudTrail 리소스를 그대로 지원하므로 다른 모듈과 동일하게 관리한다. **CloudTrail은 `environments/bootstrap`, CloudWatch 알람은 `modules/observability`(환경별)로 구현 완료** — 둘의 위치가 다른 이유는 아래 참고.
 
-- **CloudWatch**
-  - EKS/RDS는 기본적으로 CloudWatch에 지표를 보낸다. 여기에 서비스별 로그 그룹(`aws_cloudwatch_log_group`, 예: `/eks/slash-api-dev`)을 만들어 애플리케이션 로그를 모은다.
-  - 핵심 알람(`aws_cloudwatch_metric_alarm`)을 최소한으로 먼저: RDS CPU/스토리지, GPU 노드 사용률, ALB 5xx 비율.
-  - 로그 그룹에는 §2의 공통 태그를 그대로 붙인다.
-- **CloudTrail**
-  - 계정 전체 API 호출 감사용으로 트레일 1개(`aws_cloudtrail`)를 만들고, 로그는 전용 S3 버킷(버저닝 + 수명주기 정책으로 오래된 로그 자동 정리/Glacier 이전)에 적재.
-  - dev 단계에서는 단일 리전 트레일로 충분, 계정이 여러 개로 늘어나면 organization trail 전환을 고려.
-- 두 서비스 모두 "공통 기반" 모듈(§3 state 관리, §4 네트워크와 같은 위치)에 넣어서 서비스별 모듈이 아니라 한 번만 구성한다.
+- **CloudWatch** (`modules/observability`, PH-05 1차 조각)
+  - RDS CPU 사용률(80% 초과)·여유 스토리지(2GB 미만) 알람 2개 + 알림용 SNS 토픽. `alarm_email` 변수로 이메일 구독 선택 가능.
+  - **ALB 5xx 비율, GPU 노드 사용률 알람은 이번 조각에 없다** — ALB Ingress·GPU 노드그룹 자체가 아직 없어서(§8, §5) 감시할 대상이 없음. 그것들이 생기면 이 모듈에 추가.
+  - 애플리케이션 로그 그룹(`aws_cloudwatch_log_group`, 예: `/eks/slash-api-dev`)은 아직 안 만듦 — 실제로 로그를 그 그룹에 밀어넣으려면 Fluent Bit 같은 로그 수집 에이전트가 클러스터 안에서 돌아야 하는데, 그 설치는 ALB Controller/Karpenter와 같은 이유로 GitOps 몫이라 로그 그룹만 먼저 만들어봐야 실익이 적어 미룸.
+- **CloudTrail** (`environments/bootstrap`)
+  - 계정 전체 API 호출 감사용으로 트레일 1개(`aws_cloudtrail`)를 만들고, 로그는 전용 S3 버킷(버저닝 + 수명주기 정책, 잠정 90일 후 만료)에 적재.
+  - **왜 환경별 모듈이 아니라 bootstrap에 두나**: CloudTrail은 계정 전체를 감사하는 거라 local/dev/prod가 각자 만들면 같은 계정 안에 트레일이 중복된다 — state 버킷·Route53 zone처럼 "계정당 한 번만" 만드는 자원이라 bootstrap이 자연스러운 자리. 반대로 CloudWatch 알람은 특정 환경의 RDS/EKS를 가리켜야 해서 환경별로 필요.
+  - 단일 리전 트레일로 충분, 계정이 여러 개로 늘어나면 organization trail 전환을 고려.
 
 ## 11. 환경 전략
 
@@ -169,13 +178,14 @@ local/dev/prod 3단계로 나눈다. **계정 공유 여부는 환경마다 다�
 
 다음 인터뷰 라운드에서 채워야 할 항목:
 
-- local 환경의 RDS도 NAT처럼 단일 AZ로 비용을 아낄지, 아니면 §7-1 스펙(Multi-AZ)을 그대로 쓸지 (지금은 dev/prod만 Multi-AZ로 확정, local은 미정)
 - dev 환경의 계정 구조 — local처럼 팀원 각자 다른 계정에서 독립 적용할지, prod처럼 담당자 몇 명이 계정 하나를 공유할지 (§11, 착수 시 결정)
+- `slash_demo` DB를 실제로 어떻게 만들지 — SSM 포트포워딩으로 직접 접속할지, EKS 안의 일회성 Job으로 처리할지 (§7-1)
+- Karpenter/ALB Ingress Controller 실제 설치(Helm) 및 GitOps 저장소 구조 — IRSA Role은 `eks` 모듈에 준비됨(§5)
 - GPU 인스턴스 정확한 타입/개수, 예상 동시 요청 수 (Gemma 모델 크기에 따라 필요 VRAM이 달라짐)
 - `slash-nlu`의 컴퓨트 요구사항 (CPU 규모, 메모리) — Kiwi 기반이라 GPU는 불필요할 것으로 추정하나 확정 필요
 - prod 환경의 네임스페이스 분리 vs 클러스터 분리 (§11)
 - Helm chart를 slash-infra 내부에 둘지, 별도 저장소로 분리할지
-- CloudTrail 로그 보관 기간, CloudWatch 알람의 실제 임계값(트래픽 실측 후 결정)
+- CloudTrail 로그 보관 기간(지금은 90일 잠정 기본값), CloudWatch 알람의 실제 임계값(지금은 CPU 80%/스토리지 2GB 잠정값) — 트래픽 실측 후 조정
+- ALB Ingress·GPU 노드그룹이 생기면 그 알람(5xx 비율, GPU 사용률)을 `modules/observability`에 추가
 - `Owner` 태그를 지금부터 붙일지, 팀이 나뉘는 시점부터 붙일지
 - Valkey(ElastiCache) 정확한 노드 타입/개수 (§7-2, 캐시 대상 데이터와 세션 규모 확정 후)
-- EKS 컨트롤플레인 모듈 시점에 §5의 EC2 3대를 실제 관리형 노드그룹으로 편입하는 절차
