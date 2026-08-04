@@ -1,7 +1,8 @@
 # 정적 파일을 담는 버킷. 퍼블릭 접근은 전부 막고, CloudFront(OAC)를 통해서만 열람 가능하다.
 resource "aws_s3_bucket" "site" {
-  bucket = var.bucket_name
-  tags   = var.tags
+  bucket        = var.bucket_name
+  force_destroy = var.force_destroy
+  tags          = var.tags
 }
 
 resource "aws_s3_bucket_public_access_block" "site" {

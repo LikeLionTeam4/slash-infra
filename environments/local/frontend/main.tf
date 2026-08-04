@@ -37,6 +37,10 @@ module "frontend_hosting" {
   domain_name    = var.domain_name
   hosted_zone_id = var.hosted_zone_id
 
+  # local은 slash-web을 다시 빌드하면 그대로 복원되는 산출물만 담고 있어서,
+  # 버킷이 안 비어있어도 destroy가 막히지 않게 켜둔다. dev/prod는 모듈 기본값(false) 유지.
+  force_destroy = true
+
   tags = {
     Project     = "slash"
     Service     = "frontend"
