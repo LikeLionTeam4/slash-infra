@@ -40,7 +40,7 @@ module "frontend_hosting" {
   tags = {
     Project     = "slash"
     Service     = "frontend"
-    Environment = "dev"
+    Environment = "local"
     ManagedBy   = "terraform"
   }
 }

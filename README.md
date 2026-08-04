@@ -7,28 +7,33 @@ modules/
   frontend-hosting/  # S3 + CloudFront + ACM + Route53 — 정적 프론트엔드 호스팅
   network/           # VPC + 3-tier 서브넷 + SG(EKS/DB) + S3 Gateway Endpoint + VPC Flow Log
 environments/
-  bootstrap/          # 모든 환경이 공유하는 state용 S3 버킷 (최초 1회만 apply)
-  dev/
-    frontend/         # frontend-hosting 모듈을 dev 값으로 조합
-    network/          # network 모듈을 dev 값으로 조합
+  bootstrap/          # 모든 환경이 공유하는 state용 S3 버킷 + Route53 hosted zone (최초 1회만 apply)
+  local/              # 개인 맥북에서 배포하는 실험용 환경
+    frontend/         # frontend-hosting 모듈을 local 값으로 조합
+    network/          # network 모듈을 local 값으로 조합 (NAT 1개로 비용 절감)
+  dev/                # prod와 거의 동일한 스펙을 유지하는 공유 테스트 서버 (아직 미구축)
+  prod/               # 실제 운영 환경 (아직 미구축)
 ```
+
+local/dev/prod는 같은 AWS 계정을 리소스명·태그로만 구분해 쓴다 (부트캠프 공유 계정이라
+`slash-` 접두사를 꼭 붙일 것 — 자세한 배경은 [docs/aws-architecture.md](docs/aws-architecture.md) §2, §11 참고).
 
 환경 디렉터리마다 별도 state를 가지므로, 전체를 한 번에 적용할 수도 있고(`terraform apply`)
 바뀐 모듈만 골라 적용할 수도 있다(`-target` 또는 필요한 환경 디렉터리에서만 apply).
 
-## 사용법 (예: environments/dev/frontend)
+## 사용법 (예: environments/local/frontend)
 
 ```
-cd environments/dev/frontend
-cp terraform.tfvars.example terraform.tfvars   # 실제 값으로 채우기
+cd environments/local/frontend
+cp terraform.tfvars.example terraform.tfvars   # 실제 값으로 채우기 (hosted_zone_id는 bootstrap output)
 terraform init
 terraform plan
 ```
 
-`environments/dev/network`는 변수 없이 바로 쓸 수 있다 (기본값이 이미 dev 값):
+`environments/local/network`는 변수 없이 바로 쓸 수 있다 (기본값이 이미 local 값):
 
 ```
-cd environments/dev/network
+cd environments/local/network
 terraform init
 terraform plan   # 유효한 AWS 자격증명 필요 (aws sts get-caller-identity로 먼저 확인)
 ```
@@ -43,10 +48,10 @@ terraform plan   # 유효한 AWS 자격증명 필요 (aws sts get-caller-identit
 - EKS 컨트롤플레인 + 초기 EC2 3대(§5) — `network` 모듈의 `private_app_subnet_ids`, `eks_security_group_id` 사용
 - API용 ALB Ingress + ACM(§8)
 
-## State 백엔드 부트스트랩 (최초 1회)
+## State 백엔드 + DNS 부트스트랩 (최초 1회)
 
-다른 모든 환경이 remote state로 쓸 S3 버킷을 만든다. 이 버킷이 없는 상태에서는 각 환경이
-local backend로 동작한다.
+다른 모든 환경이 remote state로 쓸 S3 버킷과, local/dev/prod가 공유하는 Route53 hosted
+zone(`sbsh.cloud`)을 만든다. 이 버킷이 없는 상태에서는 각 환경이 local backend로 동작한다.
 
 ```
 cd environments/bootstrap
@@ -69,7 +74,18 @@ terraform {
 }
 ```
 
-자세한 배경은 [docs/aws-architecture.md](docs/aws-architecture.md) §3 참고.
+`route53_zone_id` 출력값은 `frontend-hosting` 모듈을 쓰는 각 환경의 `hosted_zone_id` 변수로
+넘긴다. `route53_name_servers` 출력값(4개)은 가비아 도메인 관리 화면의 네임서버 설정에
+그대로 등록해서 `sbsh.cloud`를 Route53으로 위임한다.
+
+자세한 배경은 [docs/aws-architecture.md](docs/aws-architecture.md) §2, §3 참고.
+
+## AWS CLI 프로필
+
+`slash-local` / `slash-dev` / `slash-prod` 세 프로필을 미리 나눠뒀다(`~/.aws/config`).
+지금은 셋 다 같은 IAM 사용자 자격증명을 가리키지만, 이름을 분리해뒀기 때문에 나중에 단계별로
+다른 계정/사용자를 쓰기로 하면 프로필 값만 바꾸면 된다. 사용 시 `--profile slash-local` 또는
+`AWS_PROFILE=slash-local`로 지정.
 
 ## 아키텍처
 
