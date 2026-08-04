@@ -1,5 +1,16 @@
 # 실제 값으로 채운 뒤 terraform.tfvars로 복사해서 쓴다 (커밋 금지 — .gitignore 처리됨).
-# hosted_zone_id는 environments/bootstrap apply 후 `terraform output route53_zone_id`로 확인한다.
-bucket_name    = "slash-web-local"
-domain_name    = "local.sbsh.cloud"
-hosted_zone_id = "Z0000000EXAMPLE"
+# 팀원마다 부트캠프 AWS 계정이 다르므로, 아래 값은 전부 "본인 계정 기준"으로 바꿔야 한다
+# (README §다른 AWS 계정에서 시작하기 참고).
+#
+# bucket_name: S3 버킷 이름은 AWS 전체에서 유일해야 한다. slash-web-local은 원본 계정에
+#   이미 만들어져 있으니 겹치지 않게 본인 이름/계정ID를 붙여서 바꿀 것.
+# domain_name: local.sbsh.cloud는 원본 계정에서만 실제로 검증된다 (가비아가 그 계정의
+#   zone만 위임하고 있음). 다른 계정에서 그대로 apply하면 ACM 인증서 DNS 검증이 끝나지
+#   않아 apply가 멈춘다 — 본인이 위임 가능한 도메인으로 바꾸거나, 이 모듈은 건너뛰고
+#   network까지만 연습하는 걸 권장.
+# hosted_zone_id: 본인 계정에서 environments/bootstrap을 apply한 뒤
+#   `terraform output route53_zone_id`로 나온 값을 쓴다 — 원본 계정의 zone ID를 그대로
+#   쓰면 계정이 달라 권한이 없어서 AccessDenied로 실패한다.
+bucket_name    = "slash-web-local-<본인이름 또는 계정ID>"
+domain_name    = "local.sbsh.cloud" # 본인 소유 도메인 없으면 이 모듈은 건너뛰는 걸 권장
+hosted_zone_id = "Z0000000EXAMPLE"  # 본인 계정의 bootstrap output 값으로 교체

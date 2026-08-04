@@ -184,8 +184,10 @@ resource "aws_vpc_endpoint" "s3" {
 # ---- Security groups: EKS / DB ----
 
 resource "aws_security_group" "eks" {
-  name        = "${var.name_prefix}-eks-sg-${var.environment}"
-  description = "EKS 노드/파드 baseline SG — 실제 클러스터 생성 시 EKS가 만드는 SG와 별개로 네트워크 계층에서 미리 준비"
+  name = "${var.name_prefix}-eks-sg-${var.environment}"
+  # AWS GroupDescription은 ASCII만 허용 — 한글 설명은 별도 Terraform 주석으로.
+  # EKS 노드/파드 baseline SG — 실제 클러스터 생성 시 EKS가 만드는 SG와 별개로 네트워크 계층에서 미리 준비.
+  description = "EKS node/pod baseline SG - prepared at network layer ahead of actual cluster creation"
   vpc_id      = aws_vpc.main.id
 
   tags = merge(var.tags, {
@@ -197,19 +199,21 @@ resource "aws_vpc_security_group_ingress_rule" "eks_self" {
   security_group_id            = aws_security_group.eks.id
   referenced_security_group_id = aws_security_group.eks.id
   ip_protocol                  = "-1"
-  description                  = "같은 SG 멤버 간 전체 트래픽 허용 (노드-노드, 컨트롤플레인-노드)"
+  # 같은 SG 멤버 간 전체 트래픽 허용 (노드-노드, 컨트롤플레인-노드)
+  description = "Allow all traffic between members of this SG (node-to-node, control-plane-to-node)"
 }
 
 resource "aws_vpc_security_group_egress_rule" "eks_all" {
   security_group_id = aws_security_group.eks.id
   cidr_ipv4         = "0.0.0.0/0"
   ip_protocol       = "-1"
-  description       = "전체 아웃바운드 허용"
+  description       = "Allow all outbound"
 }
 
 resource "aws_security_group" "db" {
-  name        = "${var.name_prefix}-db-sg-${var.environment}"
-  description = "RDS(PostgreSQL) / Valkey — 인바운드는 EKS SG에서만"
+  name = "${var.name_prefix}-db-sg-${var.environment}"
+  # RDS(PostgreSQL) / Valkey — 인바운드는 EKS SG에서만.
+  description = "RDS(PostgreSQL) / Valkey - inbound only from EKS SG"
   vpc_id      = aws_vpc.main.id
 
   tags = merge(var.tags, {
@@ -223,7 +227,7 @@ resource "aws_vpc_security_group_ingress_rule" "db_postgres" {
   ip_protocol                  = "tcp"
   from_port                    = 5432
   to_port                      = 5432
-  description                  = "EKS SG로부터 PostgreSQL"
+  description                  = "PostgreSQL from EKS SG"
 }
 
 resource "aws_vpc_security_group_ingress_rule" "db_valkey" {
@@ -232,12 +236,12 @@ resource "aws_vpc_security_group_ingress_rule" "db_valkey" {
   ip_protocol                  = "tcp"
   from_port                    = 6379
   to_port                      = 6379
-  description                  = "EKS SG로부터 Valkey"
+  description                  = "Valkey from EKS SG"
 }
 
 resource "aws_vpc_security_group_egress_rule" "db_all" {
   security_group_id = aws_security_group.db.id
   cidr_ipv4         = "0.0.0.0/0"
   ip_protocol       = "-1"
-  description       = "전체 아웃바운드 허용 (패치 등)"
+  description       = "Allow all outbound (patching etc.)"
 }

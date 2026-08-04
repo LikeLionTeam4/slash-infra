@@ -24,3 +24,9 @@ variable "tags" {
   type        = map(string)
   default     = {}
 }
+
+variable "force_destroy" {
+  description = "true면 버킷이 비어있지 않아도 destroy 가능 (안의 오브젝트 전부 같이 삭제). 여기 담기는 건 빌드 산출물이라 재생산 가능한 환경(local 등)에서만 true로 켠다 — 기본값은 안전하게 false."
+  type        = bool
+  default     = false
+}

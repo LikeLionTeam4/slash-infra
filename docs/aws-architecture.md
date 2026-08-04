@@ -69,7 +69,8 @@ Slash 프로젝트 전체(웹 프론트엔드 제외 백엔드 서비스군)를 
 - 노드그룹 2종(중기):
   - **범용 노드그룹** — `slash-api`, `slash-nlu`, ArgoCD, 기타 클러스터 애드온용. 온디맨드, 오토스케일링 (최소/최대는 실사용 부하 보고 결정). 위 3대가 이 그룹의 시작점.
   - **GPU 노드그룹** — `slash-llm`(Gemma 추론) 전용. `g4dn.xlarge` 또는 `g5.xlarge` 계열로 시작, NVIDIA device plugin 필요. 상시 켜두면 비용이 크므로 오토스케일링(0으로 축소 가능한 구성)을 강하게 권장 — 콜드스타트(모델 로딩 시간)와 비용의 트레이드오프는 실제 트래픽 패턴을 보고 조정.
-- IRSA 활성화, 클러스터 오토스케일러 또는 Karpenter 중 하나를 붙인다 (Karpenter가 GPU/스팟 혼합 노드 관리에 더 유연하므로 우선 후보).
+- IRSA 활성화 — 클러스터 생성 시 AWS가 발급하는 클러스터 전용 OIDC 발급자를 `aws_iam_openid_connect_provider`로 등록해서, 파드가 자기 ServiceAccount 신원으로 IAM Role을 빌려쓸 수 있게 한다(§7-1의 Secrets Manager 접근이 이 경로를 씀). GitHub Actions용 OIDC provider(§9-1)와는 별개의 리소스.
+- 클러스터 오토스케일러 또는 Karpenter 중 하나를 붙인다 (Karpenter가 GPU/스팟 혼합 노드 관리에 더 유연하므로 우선 후보).
 
 ## 6. 컨테이너 레지스트리
 
@@ -113,6 +114,16 @@ Slash 프로젝트 전체(웹 프론트엔드 제외 백엔드 서비스군)를 
 - GitHub Actions: 각 서비스 저장소(`slash-api`, `slash-nlu`, `slash-llm`)에서 빌드 → 테스트 → ECR push.
 - ArgoCD가 별도 Git 저장소(또는 slash-infra 내 `helm/` 디렉터리)의 Helm chart를 보고 EKS에 GitOps 방식으로 배포 — 이미지 태그 업데이트는 PR/커밋으로 반영.
 - Helm chart 구조 제안: 서비스별 디렉터리(`helm/slash-api/`, `helm/slash-nlu/`, `helm/slash-llm/`), 환경별 values 파일(`values-dev.yaml`, `values-prod.yaml`)로 분리.
+- **적용 범위: local 제외, dev부터 이 파이프라인 전체(GitHub Actions + ArgoCD)를 적용한다.** local은 개인이 직접 `terraform apply`/수동 배포하는 실험용이라 CI/CD 자동화가 필요 없다 (§11).
+
+### 9-1. GitHub Actions → AWS 인증 (OIDC)
+
+**결정: 고정 IAM 액세스 키를 GitHub Secrets에 저장하지 않고, OIDC federation으로 임시 자격증명을 발급받는다.** state 버킷 락(§3)에서 DynamoDB 대신 native lock을 택한 것과 같은 방향 — 오래 사는 고정 비밀보다 짧게 사는 위임 자격증명을 우선한다.
+
+- GitHub Actions가 워크플로 실행마다 자체 OIDC 토큰(발급자 `token.actions.githubusercontent.com`)을 갖고, `aws-actions/configure-aws-credentials` 액션이 이 토큰으로 `AssumeRoleWithWebIdentity`를 호출해 몇 시간짜리 임시 자격증명을 받는다.
+- 필요 리소스: `aws_iam_openid_connect_provider` 1개(발급자 `token.actions.githubusercontent.com`) + IAM Role 1개(신뢰 정책을 `repo:LikeLionTeam4/<repo>:ref:refs/heads/<branch>`처럼 저장소·브랜치 단위로 제한, 권한은 ECR push만).
+- **EKS의 IRSA용 OIDC provider(§5)와는 완전히 별개**다 — 발급자도, 신뢰 대상(저장소/브랜치 vs 클러스터의 ServiceAccount)도 다르다. `aws_iam_openid_connect_provider`가 계정에 총 2개(EKS용 1개 + GitHub용 1개) 생기는 구조.
+- EKS/ECR을 만드는 PH-03 시점에 이 GitHub OIDC provider + Role도 같이 추가한다.
 
 ## 10. 옵저버빌리티 (CloudWatch / CloudTrail)
 
@@ -129,15 +140,16 @@ Terraform 밖에서 별도로 작업할 필요는 없다 — AWS provider가 Clo
 
 ## 11. 환경 전략
 
-local/dev/prod 3단계로 나눈다. 계정은 하나(§2)를 공유하고, 아래 순서대로 구축한다.
+local/dev/prod 3단계로 나눈다. **계정 공유 여부는 환경마다 다르다** — §2의 "계정은 하나"는 한 사람이 local/dev/prod를 전부 적용할 때 얘기고, 실제로는 아래처럼 갈린다.
 
-| 환경 | 역할 | 스펙 | 상태 |
-| --- | --- | --- | --- |
-| **local** | 개인 맥북에서 `terraform apply`하는 실험용 — 모듈 변경을 실제 AWS에서 검증 | 최소 구성 (`environments/local/*` 그대로) | `network`/`frontend` 구축, RDS/EKS는 다음 단계 |
-| **dev** | prod와 거의 동일한 스펙을 유지하는 공유 테스트 서버 — 팀 전체가 QA에 사용 | prod와 동일 모듈, 동일 값(인스턴스 크기 등) | 미구축 — local이 안정화된 뒤 착수 |
-| **prod** | 실제 운영 환경 | Multi-AZ, 가용성 우선 | 미구축 |
+| 환경 | 역할 | 스펙 | 계정 | 상태 |
+| --- | --- | --- | --- | --- |
+| **local** | 개인 맥북에서 `terraform apply`하는 실험용 — 모듈 변경을 실제 AWS에서 검증 | 최소 구성 (`environments/local/*` 그대로) | **팀원마다 다른 계정** (부트캠프 계정이 개인별 발급) — 서로 공유·의존 없이 각자 독립 적용. 자세한 건 [README §다른 AWS 계정에서 시작하기](../README.md#다른-aws-계정에서-시작하기-팀원용) | `network`/`frontend` 구축, RDS/EKS는 다음 단계 |
+| **dev** | prod와 거의 동일한 스펙을 유지하는 공유 테스트 서버 — 팀 전체가 QA에 사용 | prod와 동일 모듈, 동일 값(인스턴스 크기 등) | 미정 — 착수 시 결정 | 미구축 — local이 안정화된 뒤 착수 |
+| **prod** | 실제 운영 환경 | Multi-AZ, 가용성 우선 | **인프라 담당자 2명이 계정 하나를 공유**. 코스가 2026-09-04까지라 별도 신규 계정은 안 만들고, 두 담당자 중 한 명의 (부트캠프) 계정을 골라 그 안에 나머지 한 명의 IAM 사용자를 추가하는 방식 — 착수 시 어느 쪽 계정으로 할지만 정하면 됨 | 미구축 |
 
 - local에서 검증된 모듈을 그대로 dev/prod에 재사용한다 — 모듈 코드 자체는 세 환경이 동일하고, `environments/<env>/` root의 변수 값만 다르다.
+- local이 dev/prod와 값만 다른 게 아니라 **아예 빠지는 것도 있다**: NAT Gateway는 local만 1개(§4), RDS Multi-AZ는 dev/prod만 활성화(§7-1), **CI/CD 파이프라인(GitHub Actions + ArgoCD, §9)은 dev부터만 적용**하고 local은 수동 배포로 충분하다.
 - prod 확장 시 EKS 구성 방식 두 가지 중 선택 필요 (아직 미결정, 다음 라운드 인터뷰 대상):
   - **네임스페이스 분리**: 같은 EKS 클러스터 안에서 `dev`/`prod` 네임스페이스로 나눔 — 비용 절감, 격리는 약함.
   - **클러스터 분리**: 환경별로 별도 EKS 클러스터 — 격리는 강하지만 비용·운영 부담 증가.
@@ -158,7 +170,7 @@ local/dev/prod 3단계로 나눈다. 계정은 하나(§2)를 공유하고, 아�
 다음 인터뷰 라운드에서 채워야 할 항목:
 
 - local 환경의 RDS도 NAT처럼 단일 AZ로 비용을 아낄지, 아니면 §7-1 스펙(Multi-AZ)을 그대로 쓸지 (지금은 dev/prod만 Multi-AZ로 확정, local은 미정)
-- 가비아 네임서버를 `environments/bootstrap` Route53 zone의 NS 레코드로 실제로 변경 (apply 후 `terraform output route53_name_servers` 값을 가비아 도메인 설정에 등록)
+- dev 환경의 계정 구조 — local처럼 팀원 각자 다른 계정에서 독립 적용할지, prod처럼 담당자 몇 명이 계정 하나를 공유할지 (§11, 착수 시 결정)
 - GPU 인스턴스 정확한 타입/개수, 예상 동시 요청 수 (Gemma 모델 크기에 따라 필요 VRAM이 달라짐)
 - `slash-nlu`의 컴퓨트 요구사항 (CPU 규모, 메모리) — Kiwi 기반이라 GPU는 불필요할 것으로 추정하나 확정 필요
 - prod 환경의 네임스페이스 분리 vs 클러스터 분리 (§11)
