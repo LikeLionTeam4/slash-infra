@@ -17,8 +17,9 @@ Apply는 이 표의 순서대로, **Destroy는 반대 순서**로 진행한다. 
 | 5 | EKS + EC2(3대) + ECR | ✅ 코드 완료, **apply→검증→destroy 완료(현재는 미적용)** | 2번의 `private_app_subnet_ids`, `eks_security_group_id` 필요. 4번과는 서로 독립적 | 2번(network)**보다 먼저** 지워야 함(서브넷/SG를 참조 중). ECR도 `force_delete` 안 켜놔서 이미지 있으면 비우거나 옵션 추가 필요(§4 flow_logs 버킷과 같은 패턴) |
 | 6 | ALB Ingress + API용 ACM | ⬜ 미구현 | 5번(로드밸런서 컨트롤러) + 1번(zone) 필요 | (미구현) |
 | 7 | CloudWatch 알람(`modules/observability`) | ✅ 코드 완료, **apply→검증→destroy 완료(현재는 미적용)** (RDS CPU/스토리지만, ALB·GPU 알람은 6번·GPU 노드그룹 생기면 추가) | 4번의 `rds_instance_id` 필요 | 4번(database)**보다 먼저** 지워야 함(§5-2, 알람이 그 인스턴스ID를 참조) |
+| 8 | Cognito(`modules/cognito`, User Pool+Client+Domain, Managed Login) | ✅ 적용됨, **상시 유지**(slash-web/slash-api가 이 User Pool ID·Client ID를 직접 참조하므로 database/eks처럼 검증 후 destroy하지 않는다) — 이메일+비밀번호만, Google 소셜 로그인은 채택 안 하기로 결정(2026-08-05) | 없음 — 1·2번과 무관, 완전히 독립적(VPC 안 씀) | 다른 모듈과 참조 관계 없어서 순서 무관이지만, slash-web/slash-api 로컬 설정이 이 값에 의존하므로 팀에 미리 알리지 않고 지우지 말 것 |
 
-- **1·2번은 서로 의존이 없어서 순서를 바꾸거나 동시에 apply해도 무방**하다. 3번(frontend)부터는 1번이 먼저 끝나 있어야 하고, 4번(RDS+Valkey)·5번(EKS)은 둘 다 2번(network)의 서브넷·SG를 참조하므로 2번이 먼저 있어야 한다. 4번과 5번은 서로 무관 — 순서 상관없음. 7번(CloudWatch)은 4번 다음.
+- **1·2·8번은 서로 의존이 없어서 순서를 바꾸거나 동시에 apply해도 무방**하다. 3번(frontend)부터는 1번이 먼저 끝나 있어야 하고, 4번(RDS+Valkey)·5번(EKS)은 둘 다 2번(network)의 서브넷·SG를 참조하므로 2번이 먼저 있어야 한다. 4번과 5번은 서로 무관 — 순서 상관없음. 7번(CloudWatch)은 4번 다음. 8번(Cognito)은 VPC를 쓰지 않는 리전 서비스라 다른 모든 모듈과 무관.
 - **Destroy는 표 번호의 역순이 기본**이지만, 4·5번은 2번을, 7번은 4번을 참조하고 있어서 각각 **참조 대상보다 반드시 먼저** 지워야 한다.
 - dev/prod 환경 자체는 아직 미구축 — 계정 구조는 `docs/aws-architecture.md` §11 참고 (local은 팀원마다 다른 계정, prod는 담당자 2명이 계정 하나 공유).
 
@@ -29,6 +30,7 @@ Apply는 이 표의 순서대로, **Destroy는 반대 순서**로 진행한다. 
 | `environments/bootstrap` | 5 | `route53_zone_id = Z03858108FMADVU36PUA`, `bucket_name = slash-tfstate-727646470302` | 적용됨 |
 | `environments/local/network` | 38 | `vpc_id = vpc-0e99fcc8dcea839a0`, NAT 1개(`ap-northeast-2a`) | 적용됨 |
 | `environments/local/frontend` | 12 | `site_url = https://local.sbsh.cloud`, `bucket_name = slash-web-local-727646470302`, `frontend_deploy_role_arn = arn:aws:iam::727646470302:role/slash-frontend-deploy-local` | 적용됨, 콘텐츠까지 배포됨. GitHub OIDC 배포 Role(`modules/frontend-cicd`) 추가 적용(2026-08-05) |
+| `environments/local/cognito` | 3 | `user_pool_id = ap-northeast-2_s2ZnfGrqo`, `user_pool_client_id = 4g9h0vsvel02drlieqbg9n9nhi`, `issuer_url = https://cognito-idp.ap-northeast-2.amazonaws.com/ap-northeast-2_s2ZnfGrqo`, `hosted_domain = https://slash-local-727646470302.auth.ap-northeast-2.amazoncognito.com` | 적용됨, 상시 유지. Managed Login(v2) + 이메일·비밀번호. slash-web/slash-api가 이 값들을 직접 참조하므로 destroy 금지 |
 | `environments/dev/*` | – | – | 미구축 |
 | `environments/prod/*` | – | – | 미구축 |
 
@@ -64,6 +66,12 @@ Apply는 이 표의 순서대로, **Destroy는 반대 순서**로 진행한다. 
 | 2026-08-05 | `slash-web` | dev 기준 새 브랜치(`ci/deploy-dev-workflow`)로 PR #15 오픈 → merge → 워크플로 실행 → `sts:AssumeRoleWithWebIdentity` `AccessDenied`로 **2차 실패** | GitHub OIDC "immutable IDs"로 `sub` 클레임에 조직/저장소 뒤 숫자 ID가 붙어 나와서 `StringEquals` 조건과 불일치 — §4 참고 |
 | 2026-08-05 | `modules/frontend-cicd` + `local/frontend` | trust policy 조건을 `StringEquals`→`StringLike`+와일드카드로 재apply | §4 참고 |
 | 2026-08-05 | `slash-web` | `workflow_dispatch`로 재실행 → **전체 스텝 성공**, `local.sbsh.cloud`의 `index.html` 실제 갱신 확인(`last-modified` 헤더로 검증) | CI/CD 파이프라인 end-to-end 검증 완료 |
+| 2026-08-05 | `modules/cognito`(신규) + `local/cognito` | User Pool + 퍼블릭 App Client + Domain apply 시도 → `sign_in_policy.allowed_first_auth_factors = ["EMAIL_OTP"]`만으로 **1차 실패** | Cognito API가 `PASSWORD`를 필수 포함하도록 요구 — §4 참고 |
+| 2026-08-05 | `modules/cognito` + `local/cognito` | `allowed_first_auth_factors`에 `PASSWORD` 추가 후 재apply(3개) → 성공 | `user_pool_id = ap-northeast-2_s2ZnfGrqo` — 최초에는 SPA가 Cognito API를 직접 호출(SDK 방식)하는 걸로 설계했었음(이후 아래 항목에서 뒤집힘) |
+| 2026-08-05 | `modules/cognito` + `local/cognito` | `slash-web`팀이 받은 `frontend-api-contract.md`(백엔드) 확인 결과 인증 방식이 Authorization Code+PKCE(Managed Login 리다이렉트) 전제라는 걸 확인 → App Client의 OAuth 설정을 `enable_google_idp` 조건부에서 상시 활성화로 변경, `refresh_token_validity`를 30일→7일(계약서 권장값)로 조정, `callback_urls`에 `/callback` 경로 추가하여 재apply | 이전에 만들었던 SDK 직접 호출 방식(`slash-web`의 `cognitoAuth.ts`)은 전량 폐기 — `oidc-client-ts` 기반으로 재작성 |
+| 2026-08-05 | `local/cognito` (`aws_cognito_user_pool_domain.main`) | `managed_login_version`을 명시 안 해서 기본값(1, classic Hosted UI)으로 생성돼 있던 걸 2(Managed Login)로 재apply | 브랜딩 커스터마이징(다음 항목)이 v2에만 적용되는데 실제 도메인은 v1이었던 걸 뒤늦게 발견 — §4 참고할 만한 함정이지만 별도 트러블슈팅 절은 안 만듦(원인이 단순 누락) |
+| 2026-08-05 | Cognito Managed Login 브랜딩 | `aws cognito-idp create/update-managed-login-branding` **CLI로** slash-web의 DESIGN.md 토큰(canvas/surface/hairline/foreground/muted, 다크·라이트 `DYNAMIC` 전환, radius 스케일)에 맞춰 커스터마이징 + `public/logo.png`를 FORM_LOGO 에셋으로 업로드 | **Terraform이 아니라 AWS CLI로 관리** — AWS provider가 `~> 5.0`(설치된 5.100.0)까지만 허용되는데 `aws_cognito_managed_login_branding` 리소스는 6.x부터 지원돼서 당장은 Terraform으로 못 옮김. 프로바이더를 6.x로 올리는 건 EKS/RDS 등 다른 모든 모듈에 영향을 주는 큰 변경이라 이번 작업 범위로는 보류 — 나중에 6.x로 올릴 계획이 서면 이 브랜딩도 그때 같이 Terraform으로 옮길 것. 로고 이미지 자체는 에셋 등록까지 됐는데 실제 렌더링이 안 되는 원인 미해결로 남음(placeholder 아이콘만 보임) |
+| 2026-08-05 | `modules/cognito` + `local/cognito` | Google 소셜 로그인을 최종적으로 채택하지 않기로 결정 → `enable_google_idp`/`google_client_id`/`google_client_secret` 변수와 `google_idp.tf`(`aws_cognito_identity_provider.google`) 삭제, `terraform.tfvars.example` 삭제 | plan 결과 `No changes`(애초에 Google IdP를 apply한 적이 없어서 실제 리소스는 그대로) — 코드만 정리됨. `slash-web` 로그인 화면의 "Google로 계속하기" 버튼은 UI에는 남기되 비활성 상태 유지(팀 결정) |
 
 ### 보안그룹 description의 ASCII 제약 (2026-08-04)
 
@@ -183,6 +191,20 @@ content-type: application/xml
 
 - **원인**: `modules/frontend-hosting`의 `custom_error_response`가 `404`(NoSuchKey)만 `/index.html`로 재작성하고 있었다. 그런데 이 버킷 정책은 CloudFront OAC에 `s3:GetObject`만 주고 `s3:ListBucket`은 안 줘서, S3가 존재하지 않는 키를 요청받으면 (버킷 안에 뭐가 있는지 추측 못 하게) `404`가 아니라 **`403 AccessDenied`**를 돌려준다 — S3의 알려진 표준 동작. 그래서 SPA 폴백이 한 번도 발동한 적이 없었고, `/new`뿐 아니라 새로고침으로 진입 가능한 다른 클라이언트 라우트 전부 같은 문제였다.
 - **조치**: `custom_error_response` 블록을 하나 더 추가해서 `403`도 동일하게 `/index.html`로 재작성(`response_code = 200`). `local/frontend` 재apply(CloudFront 배포 수정 2개 리소스, 파괴 없음, 반영까지 약 1분).
+
+### Cognito User Pool은 `PASSWORD` 없이 `EMAIL_OTP` 단독으로 못 만듦 (2026-08-05)
+
+`modules/cognito`의 `aws_cognito_user_pool`을 `sign_in_policy.allowed_first_auth_factors = ["EMAIL_OTP"]`(비밀번호 없이 이메일 OTP만)로 apply했더니 생성 자체가 거부됐다.
+
+```
+Error: creating Cognito User Pool (slash-users-local): ...
+InvalidParameterException: Password should be configured as one of the allowed first auth factors.
+```
+
+- **원인**: Cognito API는 `sign_in_policy`에 `PASSWORD`가 반드시 포함되어 있어야 한다 — `EMAIL_OTP` 등 다른 1차 인증 수단은 `PASSWORD`에 **추가**할 수만 있고, 완전히 대체할 수는 없다(2026-08 시점 API 제약). "비밀번호 없는 로그인"을 원한다고 해서 User Pool 레벨에서 비밀번호 옵션 자체를 없앨 수는 없다는 뜻.
+- **영향**: User Pool·Client·Domain 3개 리소스 중 User Pool 생성 단계에서 막혀서 나머지 2개는 아예 시도되지도 않았다(순서상 가장 먼저라 영향 범위가 제일 큼).
+- **조치**: `allowed_first_auth_factors` 기본값을 `["PASSWORD", "EMAIL_OTP"]`로 변경해서 재apply, 3개 전부 성공. `slash-web`의 `LoginPage.tsx`는 애초에 `PASSWORD` 챌린지를 요청하지 않고 `EMAIL_OTP`만 쓰므로, User Pool이 `PASSWORD`를 "허용"하고 있어도 실제 로그인 화면에 비밀번호 입력란이 나오는 건 아니다 — AWS API 제약과 실제 앱 UX는 별개.
+- **교훈**: Cognito의 "1차 인증 수단"은 User Pool이 뭘 **허용**하는지 목록이지, 클라이언트가 뭘 **강제로 요구**받는지가 아니다. `PASSWORD`를 목록에 넣는 게 "비밀번호 로그인을 지원한다"는 뜻은 아니고, 그냥 Cognito가 요구하는 최소 조건을 채운 것 — 실제 어떤 챌린지를 쓸지는 앱(프론트/`slash-api`)이 `InitiateAuth` 호출 시 고르는 문제다.
 - **교훈**: CloudFront+S3 OAC+SPA 조합에서는 **404뿐 아니라 403도 같이 처리**해야 한다 — `s3:ListBucket`을 안 주는 게(권장되는 최소 권한) 오히려 에러 코드를 바꿔버리는 부작용이 있다는 걸 몰랐음.
 
 ## 5. Destroy 절차
@@ -243,6 +265,15 @@ AWS_PROFILE=slash-local terraform destroy -input=false
 cd environments/bootstrap
 # main.tf에서 prevent_destroy 블록 제거 후
 AWS_PROFILE=slash-local terraform plan -destroy -input=false
+AWS_PROFILE=slash-local terraform destroy -input=false
+```
+
+### 5-6. `local/cognito` — 순서 무관, 아무 때나
+
+- VPC/다른 모듈을 전혀 참조하지 않는 완전히 독립적인 환경이라, 위 5개(§5-1~5-5)와 순서 상관없이 언제 지워도 무방하다.
+
+```bash
+cd environments/local/cognito
 AWS_PROFILE=slash-local terraform destroy -input=false
 ```
 
