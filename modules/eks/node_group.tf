@@ -54,9 +54,10 @@ resource "aws_launch_template" "node" {
 
   vpc_security_group_ids = [var.eks_security_group_id]
 
-  iam_instance_profile {
-    arn = aws_iam_instance_profile.node.arn
-  }
+  # EKS 관리형 노드그룹은 aws_eks_node_group.node_role_arn으로 인스턴스 프로필을
+  # 자체 구성한다 — launch template에 iam_instance_profile을 지정하면 API가 거부한다
+  # ("Launch template ... should not specify an instance profile").
+  # aws_iam_instance_profile.node 자체는 outputs/karpenter.tf에서 계속 참조하므로 유지.
 
   metadata_options {
     http_tokens = "required" # IMDSv2 강제

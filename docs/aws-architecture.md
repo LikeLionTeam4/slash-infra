@@ -130,9 +130,22 @@ Slash 프로젝트 전체(웹 프론트엔드 제외 백엔드 서비스군)를 
 **결정: 고정 IAM 액세스 키를 GitHub Secrets에 저장하지 않고, OIDC federation으로 임시 자격증명을 발급받는다.** state 버킷 락(§3)에서 DynamoDB 대신 native lock을 택한 것과 같은 방향 — 오래 사는 고정 비밀보다 짧게 사는 위임 자격증명을 우선한다.
 
 - GitHub Actions가 워크플로 실행마다 자체 OIDC 토큰(발급자 `token.actions.githubusercontent.com`)을 갖고, `aws-actions/configure-aws-credentials` 액션이 이 토큰으로 `AssumeRoleWithWebIdentity`를 호출해 몇 시간짜리 임시 자격증명을 받는다.
-- 필요 리소스: `aws_iam_openid_connect_provider` 1개(발급자 `token.actions.githubusercontent.com`) + IAM Role 1개(신뢰 정책을 `repo:LikeLionTeam4/<repo>:ref:refs/heads/<branch>`처럼 저장소·브랜치 단위로 제한, 권한은 ECR push만).
-- **EKS의 IRSA용 OIDC provider(§5)와는 완전히 별개**다 — 발급자도, 신뢰 대상(저장소/브랜치 vs 클러스터의 ServiceAccount)도 다르다. `aws_iam_openid_connect_provider`가 계정에 총 2개(EKS용 1개 + GitHub용 1개) 생기는 구조.
-- EKS/ECR을 만드는 PH-03 시점에 이 GitHub OIDC provider + Role도 같이 추가한다.
+- **`aws_iam_openid_connect_provider`(발급자 `token.actions.githubusercontent.com`)는 우리가 만들지 않는다.** 2026-08-05 프론트엔드 CI/CD 작업 중 확인한 사실: 이 계정은 부트캠프 여러 팀이 공유하고 있고(`aws iam list-open-id-connect-providers`로 EKS OIDC provider가 60개 넘게 이미 있음을 확인), GitHub용 provider도 다른 팀(`Team1-front-github-oidc` 태그, 2025-08-01 생성)이 이미 만들어놨다. IAM OIDC provider는 계정에 URL당 1개만 등록 가능해서 우리가 새로 만들면 충돌한다 — Terraform에서 `aws_iam_openid_connect_provider` 리소스로 소유·관리하지 않고, `data "aws_iam_openid_connect_provider"`로 읽기 전용 참조만 한다(예시: `modules/frontend-cicd`). 이 provider의 생명주기(삭제 등)에는 절대 관여하지 않는다 — 다른 팀도 쓰고 있어서 지우면 그쪽 CI가 깨진다.
+- 필요 리소스는 서비스별 IAM Role뿐이다(신뢰 정책을 `repo:LikeLionTeam4/<repo>:ref:refs/heads/<branch>`처럼 저장소·브랜치 단위로 제한). 백엔드는 ECR push 권한, 프론트엔드는 S3/CloudFront 권한(§9-2)으로 Role을 나눠서 최소 권한을 유지한다 — 같은 provider를 참조하는 Role을 서비스마다 여러 개 만드는 구조.
+- **EKS의 IRSA용 OIDC provider(§5)와는 완전히 별개**다 — 발급자도, 신뢰 대상(저장소/브랜치 vs 클러스터의 ServiceAccount)도 다르다.
+- EKS/ECR을 만드는 PH-03 시점에 백엔드용 Role을 추가한다.
+
+### 9-2. 프론트엔드 배포 CI/CD (S3 + CloudFront)
+
+`modules/frontend-cicd`로 구현 완료, local에서 apply·end-to-end 검증까지 마침(2026-08-05, 실제로 `local.sbsh.cloud`가 갱신되는 것까지 확인). 백엔드(§9)와 달리 컨테이너·EKS·ArgoCD를 전혀 쓰지 않는 훨씬 단순한 파이프라인이다 — `slash-web`은 Vite로 빌드되는 정적 사이트라 빌드 산출물을 S3에 올리고 CloudFront 캐시만 무효화하면 끝난다.
+
+- 플로우: GitHub Actions에서 `npm run build` → OIDC로 임시 자격증명 획득 → `aws s3 sync`(`--delete`, `index.html` 제외하고 1년 캐시) → `index.html`만 별도로 `no-cache`로 업로드 → `cloudfront create-invalidation --paths "/index.html"`.
+- **`index.html`을 마지막에, 별도로 올리는 이유**: Vite 빌드는 JS/CSS 파일명에 콘텐츠 해시가 붙어서 오래 캐시해도 안전하지만, `index.html`은 해시가 안 붙고 그 안에서 새 해시 파일들을 참조한다. 자산보다 `index.html`이 먼저 올라가면 아직 안 올라간 해시 파일을 참조하는 순간이 생겨 배포 중 404가 날 수 있다.
+- IAM Role은 §9-1의 공유 OIDC provider를 참조하되, **백엔드용과는 별도**로 환경마다 하나씩(`slash-frontend-deploy-<env>`) 만든다 — 권한은 해당 환경의 버킷(`s3:PutObject/DeleteObject/ListBucket`)과 해당 CloudFront 배포(`cloudfront:CreateInvalidation`)로 한정, ECR 권한은 없음.
+- **적용 범위: local부터 검증한다 (§9의 "local 제외, dev부터"와 다름).** §9의 "local 제외" 규정은 GitHub Actions+ArgoCD로 명시된 백엔드 GitOps 파이프라인 얘기고, 프론트엔드는 이미 떠 있는 `local/frontend`(EKS/DB처럼 매번 apply/destroy할 필요 없음)에 Role만 추가하면 되니 비용·시간 부담 없이 local에서 먼저 배선을 검증하고 dev/prod엔 버킷/배포 ID만 바꿔 재사용한다.
+- **trust policy의 저장소 조건은 `StringEquals`가 아니라 `StringLike`+와일드카드를 쓴다.** `LikeLionTeam4` 조직은 GitHub OIDC의 "immutable IDs"가 켜져 있어서 실제 `sub` 클레임이 `repo:LikeLionTeam4/slash-web:ref:...`가 아니라 `repo:LikeLionTeam4@305683394/slash-web@1315812460:ref:...`처럼 조직·저장소명 뒤에 불변 숫자 ID가 붙어 나온다(2026-08-05 CloudTrail로 확인, `docs/operations-log.md` §4 참고). 숫자 ID를 하드코딩하는 대신 이름 뒤에 와일드카드(`repo:<org>*/<repo>*:ref:refs/heads/<branch>`)를 둬서 ID 유무와 무관하게 매칭한다.
+- **현재 타겟 브랜치는 `dev`, 원래 의도는 `main`이었다.** `slash-web`의 `main`은 아직 `README.md`뿐인 빈 스텁 브랜치라(첫 시도 때 `npm ci`가 빌드할 앱 자체가 없어서 실패) 실제 개발이 이뤄지는 `dev`를 임시로 타겟팅했다. 팀이 `dev`→`main` 첫 정식 릴리스를 하면 `modules/frontend-cicd` 호출부(`environments/local/frontend`)의 `github_branch`와 `slash-web`의 워크플로 트리거를 `main`으로 되돌려야 한다(코드에 TODO로 남겨둠).
+- 워크플로 파일은 `slash-web` 저장소에 있다(`slash-infra`가 아님) — `.github/workflows/deploy-local.yml`.
 
 ## 10. 옵저버빌리티 (CloudWatch / CloudTrail)
 
@@ -158,7 +171,7 @@ local/dev/prod 3단계로 나눈다. **계정 공유 여부는 환경마다 다�
 | **prod** | 실제 운영 환경 | Multi-AZ, 가용성 우선 | **이 계정(`727646470302`)으로 확정.** `sbsh.cloud` 도메인 위임(가비아 NS)이 이미 이 계정의 Route53 zone을 가리키고 있어서, prod의 apex 도메인(§2)도 결국 이 계정에 있어야 한다 — 별도 prod 계정으로 나중에 재위임하지 않기로 함. 나머지 담당자는 이 계정에 IAM 사용자만 추가 | 미구축 |
 
 - local에서 검증된 모듈을 그대로 dev/prod에 재사용한다 — 모듈 코드 자체는 세 환경이 동일하고, `environments/<env>/` root의 변수 값만 다르다.
-- local이 dev/prod와 값만 다른 게 아니라 **아예 빠지는 것도 있다**: NAT Gateway는 local만 1개(§4), RDS Multi-AZ는 dev/prod만 활성화(§7-1), **CI/CD 파이프라인(GitHub Actions + ArgoCD, §9)은 dev부터만 적용**하고 local은 수동 배포로 충분하다.
+- local이 dev/prod와 값만 다른 게 아니라 **아예 빠지는 것도 있다**: NAT Gateway는 local만 1개(§4), RDS Multi-AZ는 dev/prod만 활성화(§7-1), **백엔드 CI/CD 파이프라인(GitHub Actions + ArgoCD, §9)은 dev부터만 적용**하고 local은 수동 배포로 충분하다. 단 **프론트엔드 CI/CD(§9-2)는 예외** — local부터 검증한다.
 - prod 확장 시 EKS 구성 방식 두 가지 중 선택 필요 (아직 미결정, 다음 라운드 인터뷰 대상):
   - **네임스페이스 분리**: 같은 EKS 클러스터 안에서 `dev`/`prod` 네임스페이스로 나눔 — 비용 절감, 격리는 약함.
   - **클러스터 분리**: 환경별로 별도 EKS 클러스터 — 격리는 강하지만 비용·운영 부담 증가.

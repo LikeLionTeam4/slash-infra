@@ -13,3 +13,7 @@ output "cloudfront_distribution_id" {
 output "bucket_name" {
   value = module.frontend_hosting.bucket_name
 }
+
+output "frontend_deploy_role_arn" {
+  value = module.frontend_cicd.role_arn
+}
