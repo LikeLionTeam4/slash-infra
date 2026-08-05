@@ -52,3 +52,25 @@ module "frontend_hosting" {
     ManagedBy   = "terraform"
   }
 }
+
+module "frontend_cicd" {
+  source = "../../../modules/frontend-cicd"
+
+  name_prefix = "slash"
+  environment = "local"
+
+  bucket_arn                  = module.frontend_hosting.bucket_arn
+  cloudfront_distribution_arn = module.frontend_hosting.cloudfront_distribution_arn
+
+  github_repo = "LikeLionTeam4/slash-web"
+  # TODO: slash-web의 main은 아직 README뿐인 빈 스텁 브랜치라 dev를 임시로 타겟팅한다.
+  # 팀이 dev->main 첫 정식 릴리스를 하면 main으로 되돌릴 것.
+  github_branch = "dev"
+
+  tags = {
+    Project     = "slash"
+    Service     = "frontend-cicd"
+    Environment = "local"
+    ManagedBy   = "terraform"
+  }
+}

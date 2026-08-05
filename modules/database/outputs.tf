@@ -4,7 +4,7 @@ output "rds_endpoint" {
 
 output "rds_instance_id" {
   description = "CloudWatch 알람의 DBInstanceIdentifier 차원에 쓰는 식별자"
-  value       = aws_db_instance.main.id
+  value       = aws_db_instance.main.identifier
 }
 
 output "rds_master_user_secret_arn" {

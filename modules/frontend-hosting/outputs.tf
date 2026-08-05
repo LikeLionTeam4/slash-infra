@@ -3,6 +3,16 @@ output "bucket_name" {
   value       = aws_s3_bucket.site.id
 }
 
+output "bucket_arn" {
+  description = "CI 배포 Role의 IAM 정책이 참조할 버킷 ARN"
+  value       = aws_s3_bucket.site.arn
+}
+
+output "cloudfront_distribution_arn" {
+  description = "CI 배포 Role의 IAM 정책이 참조할 CloudFront 배포 ARN"
+  value       = aws_cloudfront_distribution.site.arn
+}
+
 output "cloudfront_distribution_id" {
   description = "배포 후 캐시 무효화(invalidation)에 쓸 CloudFront 배포 ID"
   value       = aws_cloudfront_distribution.site.id
