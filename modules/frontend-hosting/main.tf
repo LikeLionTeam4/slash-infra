@@ -108,8 +108,19 @@ resource "aws_cloudfront_distribution" "site" {
 
   # Vite SPA 라우팅 — 존재하지 않는 S3 경로(예: /history)는 404 대신 index.html을 200으로
   # 돌려줘야 클라이언트 라우터(react-router)가 그 경로를 처리할 수 있다.
+  #
+  # 404뿐 아니라 403도 처리해야 한다: 이 버킷은 OAC 정책이 s3:GetObject만 허용하고
+  # s3:ListBucket은 안 주기 때문에, 존재하지 않는 키를 요청하면 S3가 (버킷 존재 여부를
+  # 숨기려고) 404 NoSuchKey가 아니라 403 AccessDenied를 돌려준다 — 2026-08-05,
+  # /new 새로고침 시 raw XML 에러가 그대로 노출되는 걸 보고 발견.
   custom_error_response {
     error_code         = 404
+    response_code      = 200
+    response_page_path = "/index.html"
+  }
+
+  custom_error_response {
+    error_code         = 403
     response_code      = 200
     response_page_path = "/index.html"
   }

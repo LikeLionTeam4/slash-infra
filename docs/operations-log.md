@@ -171,6 +171,20 @@ Username: repo:LikeLionTeam4@305683394/slash-web@1315812460:ref:refs/heads/dev
 - **조치**: `modules/frontend-cicd`의 조건을 `StringEquals` → `StringLike`로 바꾸고, `repo:${org}*/${repo}*:ref:refs/heads/${branch}`처럼 조직명·저장소명 뒤에 와일드카드를 붙였다 — ID가 붙어 나오든 안 붙어 나오든 매칭되게. 숫자 ID(`305683394`, `1315812460`)를 그대로 하드코딩하는 대안은 재사용성이 떨어지고 다른 저장소엔 아예 안 맞아서 배제.
 - **교훈**: GitHub OIDC 연동에서 trust policy가 "설정만 봐서는 맞는데 계속 거부"될 때는, `aws cloudtrail lookup-events`로 **실제 거부된 요청의 `Username`/`principalId`**를 보는 게 제일 빠르다 — CloudTrail 트레일 리소스가 없어도(우리는 §4 앞부분에서 이미 destroy함) 계정은 최근 90일 관리 이벤트를 항상 무료로 보관하고 있어서 `lookup-events`로 조회 가능하다.
 
+### SPA 라우팅 폴백이 404만 처리해서 403은 raw XML이 그대로 노출됨 (2026-08-05)
+
+`https://local.sbsh.cloud/new`를 새로고침하면 CloudFront/S3의 raw `AccessDenied` XML이 그대로 떴다(react-router가 렌더링할 기회조차 없이).
+
+```
+$ curl -sI https://local.sbsh.cloud/new
+HTTP/2 403
+content-type: application/xml
+```
+
+- **원인**: `modules/frontend-hosting`의 `custom_error_response`가 `404`(NoSuchKey)만 `/index.html`로 재작성하고 있었다. 그런데 이 버킷 정책은 CloudFront OAC에 `s3:GetObject`만 주고 `s3:ListBucket`은 안 줘서, S3가 존재하지 않는 키를 요청받으면 (버킷 안에 뭐가 있는지 추측 못 하게) `404`가 아니라 **`403 AccessDenied`**를 돌려준다 — S3의 알려진 표준 동작. 그래서 SPA 폴백이 한 번도 발동한 적이 없었고, `/new`뿐 아니라 새로고침으로 진입 가능한 다른 클라이언트 라우트 전부 같은 문제였다.
+- **조치**: `custom_error_response` 블록을 하나 더 추가해서 `403`도 동일하게 `/index.html`로 재작성(`response_code = 200`). `local/frontend` 재apply(CloudFront 배포 수정 2개 리소스, 파괴 없음, 반영까지 약 1분).
+- **교훈**: CloudFront+S3 OAC+SPA 조합에서는 **404뿐 아니라 403도 같이 처리**해야 한다 — `s3:ListBucket`을 안 주는 게(권장되는 최소 권한) 오히려 에러 코드를 바꿔버리는 부작용이 있다는 걸 몰랐음.
+
 ## 5. Destroy 절차
 
 destroy는 **apply의 역순**(frontend → observability → database/eks → network → bootstrap, §1 표의 3→7→{4,5}→2→1)으로 진행한다. 순서를 안 지키면 아래처럼 막힌다.
