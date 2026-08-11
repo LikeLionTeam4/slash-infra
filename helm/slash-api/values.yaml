@@ -1,0 +1,33 @@
+# repository는 정적 값이다 — Terraform output(ecr_repository_urls)에서 자동으로 끌어오지
+# 않는다. local/dev/prod가 계정 하나를 공유하는 동안은(§11) 안 바뀌지만, 계정 구조가
+# 바뀌면(§13 TODO) 여기와 slash-nlu/slash-llm의 값도 같이 고쳐야 한다.
+image:
+  repository: 727646470302.dkr.ecr.ap-northeast-2.amazonaws.com/slash-api
+  tag: "" # values-<env>.yaml에서 반드시 채운다 (dev/prod는 CI가 커밋 SHA로 갱신)
+  pullPolicy: IfNotPresent
+
+replicaCount: 1
+
+serviceAccount:
+  # IRSA Role ARN — environments/<env>/eks output의 값을 채운다 (§7-1, Secrets Manager 접근용)
+  roleArn: ""
+
+service:
+  port: 80
+  targetPort: 8080
+
+ingress:
+  enabled: false
+  className: alb
+  scheme: internet-facing
+  host: ""
+  annotations: {}
+
+env: {}
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    memory: 256Mi

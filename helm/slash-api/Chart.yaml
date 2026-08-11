@@ -1,0 +1,6 @@
+apiVersion: v2
+name: slash-api
+description: Slash 코어 API — 인증, 작업 관리, 실행 위치 결정, DB 연동
+type: application
+version: 0.1.0
+appVersion: "0.1.0"

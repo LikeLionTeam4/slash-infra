@@ -1,0 +1,12 @@
+# prod 환경 미구축(environments/prod 아직 없음) — 착수 시 아래 값을 채운다.
+image:
+  tag: "" # CI(GitHub Actions)가 커밋 SHA로 갱신
+
+serviceAccount:
+  roleArn: "" # environments/prod/eks apply 후 채운다
+
+ingress:
+  enabled: true
+  host: api.sbsh.cloud
+
+replicaCount: 3

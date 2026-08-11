@@ -1,0 +1,14 @@
+# local은 CI/CD 자동화 대상이 아니다(§11) — 팀원이 직접 `helm install`로 검증할 때만 쓴다.
+# 실제 slash-api 저장소에 아직 Dockerfile이 없어서, ECR/EKS/ALB 배선 검증용 mock 이미지를 쓴다.
+# 실제 Dockerfile이 생기면 이 태그를 지우고 실제 이미지로 바꾼다.
+image:
+  tag: mock-20260811-amd64
+
+serviceAccount:
+  roleArn: "" # local은 RDS/Secrets Manager를 안 띄우므로 비워둔다
+
+ingress:
+  enabled: true
+  host: "" # 비워두면 ALB의 기본 DNS 이름으로 접근 (도메인 연결 없이 스모크 테스트용)
+
+replicaCount: 1

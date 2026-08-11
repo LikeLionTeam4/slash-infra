@@ -1,0 +1,6 @@
+apiVersion: v2
+name: slash-nlu
+description: Slash 자연어 분석 — slash 명령 파싱, 규칙·Kiwi 의도 분류, 인자 추출
+type: application
+version: 0.1.0
+appVersion: "0.1.0"

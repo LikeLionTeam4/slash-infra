@@ -1,0 +1,5 @@
+# dev 환경 미구축 — 착수 시 아래 값을 채운다.
+image:
+  tag: "" # CI가 커밋 SHA로 갱신
+
+replicaCount: 2
