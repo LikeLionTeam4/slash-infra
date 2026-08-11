@@ -37,3 +37,8 @@ output "karpenter_controller_role_arn" {
 output "ecr_repository_urls" {
   value = { for name, repo in aws_ecr_repository.services : name => repo.repository_url }
 }
+
+output "alb_controller_role_arn" {
+  description = "AWS Load Balancer Controller Helm 설치 시 ServiceAccount 애노테이션에 넣을 Role ARN"
+  value       = aws_iam_role.alb_controller.arn
+}
