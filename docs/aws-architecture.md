@@ -78,7 +78,8 @@ Slash 프로젝트 전체(웹 프론트엔드 제외 백엔드 서비스군)를 
 `modules/eks`에 구현 완료.
 
 - 서비스별 ECR 리포지토리: `slash-api`, `slash-nlu`, `slash-llm`. `image_tag_mutability = IMMUTABLE` — 커밋 SHA 태그는 절대 안 바뀌니 덮어쓰기 자체를 막아둠.
-- 수명주기 정책: 태그 없는 이미지는 7일 후, 태그 있는 건 최근 10개만 남기고 자동 정리.
+- 수명주기 정책: 태그 없는 이미지는 7일 후, `sha-` 접두어 태그는 최근 10개만 남기고 자동 정리.
+- **`mock-` 접두어 태그는 예외**다(예: `mock-20260811`) — 실제 서비스 저장소에 Dockerfile/CI가 없던 시점에 클러스터 없이 ECR push 파이프라인만 먼저 검증하려고 만든 placeholder 이미지용(`slash-infra` 저장소 내 `mock-services/`). `sha-` 규칙(개수 기준)과 겹치지 않게 별도 규칙으로 push 후 3일 뒤 자동 정리한다 — 공유 계정에 방치되는 이미지가 안 남게 하기 위함. 각 서비스 저장소에 실제 Dockerfile/CI가 생기면 `mock-services/`와 이 규칙 둘 다 정리 대상.
 
 ## 7. 데이터베이스
 
@@ -197,7 +198,7 @@ local/dev/prod 3단계로 나눈다. **계정 공유 여부는 환경마다 다�
 - GPU 인스턴스 정확한 타입/개수, 예상 동시 요청 수 (Gemma 모델 크기에 따라 필요 VRAM이 달라짐)
 - `slash-nlu`의 컴퓨트 요구사항 (CPU 규모, 메모리) — Kiwi 기반이라 GPU는 불필요할 것으로 추정하나 확정 필요
 - prod 환경의 네임스페이스 분리 vs 클러스터 분리 (§11)
-- Helm chart를 slash-infra 내부에 둘지, 별도 저장소로 분리할지
+- ~~Helm chart를 slash-infra 내부에 둘지, 별도 저장소로 분리할지~~ → **결정: `slash-infra` 내부(`helm/`)로 확정**(2026-08-11). Terraform이 만드는 IRSA Role ARN 등과 값이 맞물려 있어 같은 저장소/같은 PR로 바꾸는 게 안전하고, 지금 규모(단일 담당자, 남은 기간 짧음)에서 저장소를 나누는 비용이 더 크다고 판단. CI가 이미지 태그를 자주 커밋하기 시작해 git log가 지저분해지면 그때 분리 재검토
 - CloudTrail 로그 보관 기간(지금은 90일 잠정 기본값), CloudWatch 알람의 실제 임계값(지금은 CPU 80%/스토리지 2GB 잠정값) — 트래픽 실측 후 조정
 - ALB Ingress·GPU 노드그룹이 생기면 그 알람(5xx 비율, GPU 사용률)을 `modules/observability`에 추가
 - `Owner` 태그를 지금부터 붙일지, 팀이 나뉘는 시점부터 붙일지

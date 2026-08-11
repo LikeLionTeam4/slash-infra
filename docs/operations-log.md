@@ -14,7 +14,7 @@ Apply는 이 표의 순서대로, **Destroy는 반대 순서**로 진행한다. 
 | 2 | `environments/local/network` | ✅ 적용됨 | 없음 — 1번과 순서 무관, 독립적 | 4·5번(database/eks)**보다 나중에** 지워야 함(§5-3, §5-4) |
 | 3 | `environments/local/frontend` (+ `modules/frontend-cicd` 배포 Role) | ✅ 적용됨 | 1번의 `hosted_zone_id` 필요 | **가장 먼저.** zone 안에 이 모듈이 만든 레코드가 있어서(§5-1) — `force_destroy=true`라 버킷 비우기는 불필요. CI Role은 이 환경 destroy 시 같이 지워짐(별도 조치 불필요) |
 | 4 | RDS + Valkey + Secrets Manager | ✅ 코드 완료, **apply→검증→destroy 완료(현재는 미적용)** | 2번의 `private_db_subnet_ids`, `db_security_group_id` 필요 | 2번(network)**보다 먼저** 지워야 함(서브넷/SG 참조). local은 `deletion_protection=false`+`skip_final_snapshot=true`라 바로 destroy 가능 |
-| 5 | EKS + EC2(3대) + ECR | ✅ 코드 완료, **apply→검증→destroy 완료(현재는 미적용)** | 2번의 `private_app_subnet_ids`, `eks_security_group_id` 필요. 4번과는 서로 독립적 | 2번(network)**보다 먼저** 지워야 함(서브넷/SG를 참조 중). ECR도 `force_delete` 안 켜놔서 이미지 있으면 비우거나 옵션 추가 필요(§4 flow_logs 버킷과 같은 패턴) |
+| 5 | EKS + EC2(3대) + ECR + ALB Controller Role | 클러스터/노드그룹/ALB Controller Role은 ✅ 코드 완료, **두 번째 apply→검증(ALB Controller+Helm chart 포함)→destroy까지 완료**(2026-08-11, §3). **ECR만 계속 적용된 상태로 유지 중** | 2번의 `private_app_subnet_ids`, `eks_security_group_id` 필요. 4번과는 서로 독립적. ECR은 이 둘과 무관 — 클러스터 없이도 apply 가능 | 2번(network)**보다 먼저** 지워야 함(서브넷/SG를 참조 중). ECR도 `force_delete` 안 켜놔서 이미지 있으면 비우거나 옵션 추가 필요(§4 flow_logs 버킷과 같은 패턴) — 단 `mock-*` 태그는 lifecycle policy가 3일 후 자동 정리하므로 그 이미지들 때문에 막힐 일은 없음. **ALB Controller로 Ingress를 만든 적이 있다면 클러스터 destroy 전에 반드시 `kubectl delete ingress`부터 해야 함**(§4 참고) |
 | 6 | ALB Ingress + API용 ACM | ⬜ 미구현 | 5번(로드밸런서 컨트롤러) + 1번(zone) 필요 | (미구현) |
 | 7 | CloudWatch 알람(`modules/observability`) | ✅ 코드 완료, **apply→검증→destroy 완료(현재는 미적용)** (RDS CPU/스토리지만, ALB·GPU 알람은 6번·GPU 노드그룹 생기면 추가) | 4번의 `rds_instance_id` 필요 | 4번(database)**보다 먼저** 지워야 함(§5-2, 알람이 그 인스턴스ID를 참조) |
 | 8 | Cognito(`modules/cognito`, User Pool+Client+Domain, Managed Login) | ✅ 적용됨, **상시 유지**(slash-web/slash-api가 이 User Pool ID·Client ID를 직접 참조하므로 database/eks처럼 검증 후 destroy하지 않는다) — 이메일+비밀번호만, Google 소셜 로그인은 채택 안 하기로 결정(2026-08-05) | 없음 — 1·2번과 무관, 완전히 독립적(VPC 안 씀) | 다른 모듈과 참조 관계 없어서 순서 무관이지만, slash-web/slash-api 로컬 설정이 이 값에 의존하므로 팀에 미리 알리지 않고 지우지 말 것 |
@@ -31,6 +31,7 @@ Apply는 이 표의 순서대로, **Destroy는 반대 순서**로 진행한다. 
 | `environments/local/network` | 38 | `vpc_id = vpc-0e99fcc8dcea839a0`, NAT 1개(`ap-northeast-2a`) | 적용됨 |
 | `environments/local/frontend` | 12 | `site_url = https://local.sbsh.cloud`, `bucket_name = slash-web-local-727646470302`, `frontend_deploy_role_arn = arn:aws:iam::727646470302:role/slash-frontend-deploy-local` | 적용됨, 콘텐츠까지 배포됨. GitHub OIDC 배포 Role(`modules/frontend-cicd`) 추가 적용(2026-08-05) |
 | `environments/local/cognito` | 3 | `user_pool_id = ap-northeast-2_s2ZnfGrqo`, `user_pool_client_id = 4g9h0vsvel02drlieqbg9n9nhi`, `issuer_url = https://cognito-idp.ap-northeast-2.amazonaws.com/ap-northeast-2_s2ZnfGrqo`, `hosted_domain = https://slash-local-727646470302.auth.ap-northeast-2.amazoncognito.com` | 적용됨, 상시 유지. Managed Login(v2) + 이메일·비밀번호. slash-web/slash-api가 이 값들을 직접 참조하므로 destroy 금지 |
+| `environments/local/eks` (ECR만) | 6 | `ecr_repository_urls = {slash-api, slash-nlu, slash-llm}` (계정 `727646470302`) | **ECR만 적용된 상태로 유지(2026-08-11)** — 클러스터+노드그룹+ALB Controller Role은 검증 끝나고 destroy 완료(§3). 클러스터/ALB Controller/Helm chart(`helm/`) 검증 이력은 §3에 남아있음, 다시 필요할 때 `terraform apply`(전체) + `helm install`로 재현 가능 |
 | `environments/dev/*` | – | – | 미구축 |
 | `environments/prod/*` | – | – | 미구축 |
 
@@ -72,6 +73,15 @@ Apply는 이 표의 순서대로, **Destroy는 반대 순서**로 진행한다. 
 | 2026-08-05 | `local/cognito` (`aws_cognito_user_pool_domain.main`) | `managed_login_version`을 명시 안 해서 기본값(1, classic Hosted UI)으로 생성돼 있던 걸 2(Managed Login)로 재apply | 브랜딩 커스터마이징(다음 항목)이 v2에만 적용되는데 실제 도메인은 v1이었던 걸 뒤늦게 발견 — §4 참고할 만한 함정이지만 별도 트러블슈팅 절은 안 만듦(원인이 단순 누락) |
 | 2026-08-05 | Cognito Managed Login 브랜딩 | `aws cognito-idp create/update-managed-login-branding` **CLI로** slash-web의 DESIGN.md 토큰(canvas/surface/hairline/foreground/muted, 다크·라이트 `DYNAMIC` 전환, radius 스케일)에 맞춰 커스터마이징 + `public/logo.png`를 FORM_LOGO 에셋으로 업로드 | **Terraform이 아니라 AWS CLI로 관리** — AWS provider가 `~> 5.0`(설치된 5.100.0)까지만 허용되는데 `aws_cognito_managed_login_branding` 리소스는 6.x부터 지원돼서 당장은 Terraform으로 못 옮김. 프로바이더를 6.x로 올리는 건 EKS/RDS 등 다른 모든 모듈에 영향을 주는 큰 변경이라 이번 작업 범위로는 보류 — 나중에 6.x로 올릴 계획이 서면 이 브랜딩도 그때 같이 Terraform으로 옮길 것. 로고 이미지 자체는 에셋 등록까지 됐는데 실제 렌더링이 안 되는 원인 미해결로 남음(placeholder 아이콘만 보임) |
 | 2026-08-05 | `modules/cognito` + `local/cognito` | Google 소셜 로그인을 최종적으로 채택하지 않기로 결정 → `enable_google_idp`/`google_client_id`/`google_client_secret` 변수와 `google_idp.tf`(`aws_cognito_identity_provider.google`) 삭제, `terraform.tfvars.example` 삭제 | plan 결과 `No changes`(애초에 Google IdP를 apply한 적이 없어서 실제 리소스는 그대로) — 코드만 정리됨. `slash-web` 로그인 화면의 "Google로 계속하기" 버튼은 UI에는 남기되 비활성 상태 유지(팀 결정) |
+| 2026-08-11 | `modules/eks/ecr.tf` | lifecycle policy에 `mock-` 접두어 태그 전용 규칙(3번, 3일 후 자동 정리) 추가 | `slash-api`/`slash-nlu`/`slash-llm` 저장소에 아직 Dockerfile/CI가 없어서, 클러스터 없이 ECR push 파이프라인만 먼저 검증하기로 함 — 기존 `sha-` 태그 규칙(개수 기준)은 mock 이미지에 적용 안 돼서 방치될 수 있었음. 공유 계정에 정리 안 된 이미지가 안 남게 별도 규칙으로 처리 |
+| 2026-08-11 | `local/eks` (`-target`으로 ECR만) | `aws_ecr_repository.services` 3개 + `aws_ecr_lifecycle_policy.services` 3개 apply(6개) → 성공 | 클러스터/노드그룹은 제외하고 ECR만 먼저 apply(비용 거의 0). 다른 팀 리포지토리(`my-ecr-nyj`, `my-ecr-mjh`, `team1-truss`, `team5/ecr/qket`)와 이름 충돌 없음을 사전 확인 |
+| 2026-08-11 | `mock-services/`(신규, `slash-infra` 저장소 내) | `slash-api`/`slash-nlu`/`slash-llm` 각 실제 포트(8080/8001/8000)를 흉내낸 최소 Python HTTP 서버(`/health` 200 JSON) 3개 작성, 로컬 빌드·실행 검증(Colima) 후 `mock-20260811` 태그로 ECR push까지 성공 | 실제 서비스 저장소에 Dockerfile이 생기기 전까지 ECR/EKS 배포 파이프라인 배선을 확인하기 위한 임시 placeholder — 실제 Dockerfile/CI가 생기면 이 디렉터리는 삭제 예정. **이번에 apply한 ECR도 검증 목적의 테스트 자원이라, 작업이 모두 끝나면 destroy 여부를 다시 논의하기로 함** |
+| 2026-08-11 | `local/eks` (나머지 14개: 클러스터+OIDC+노드그룹) | ECR 이후 나머지 리소스까지 apply(20개 전부), 클러스터·노드그룹 `ACTIVE` 확인 | 오늘 안에 끝내는 것을 전제로 apply — 실제 서비스 Dockerfile이 아직 없어서 계속 켜둘 이유가 없고, 검증 끝나면 바로 destroy할 예정(§1) |
+| 2026-08-11 | `mock-services/` 이미지 재빌드 | `mock-20260811`(arm64)로 배포한 파드가 `exec format error`로 크래시 → `mock-20260811-amd64` 태그로 amd64 재빌드 후 재배포, 3개 서비스 전부 `Running` + `/health` 정상 응답까지 확인 | §4 "로컬(Apple Silicon) 빌드 이미지와 EKS 노드 아키텍처 불일치" 참고. 두 태그 다 `mock` 접두어라 lifecycle policy가 3일 후 둘 다 자동 정리(별도 조치 불필요) |
+| 2026-08-11 | `modules/eks/alb_controller.tf`(신규) + `local/eks` | ALB Controller용 IRSA Role apply(2개) — 정책 문서는 AWS 공식 배포본(`kubernetes-sigs/aws-load-balancer-controller`)을 그대로 파일로 받아 `file()`로 참조 | 손으로 옮기면 86개 action 중 일부를 누락할 위험이 있어 원본 그대로 커밋 |
+| 2026-08-11 | AWS Load Balancer Controller (Helm, `kube-system`) | `eks/aws-load-balancer-controller` 차트 설치 → 컨트롤러 2/2 Running. 테스트 Ingress(internet-facing)로 실제 ALB 프로비저닝 → 타겟 healthy → `/health` 응답까지 전 구간 확인 | ALB Controller가 `alb`라는 `IngressClass`를 자동 생성해줌 — 이후 `kubernetes.io/ingress.class` 어노테이션 대신 `spec.ingressClassName: alb` 사용(§4 "deprecated ingress.class" 참고) |
+| 2026-08-11 | `helm/`(신규) | `slash-api`/`slash-nlu`/`slash-llm` 3개 Helm chart 작성(서비스별 디렉터리 + `values-{local,dev,prod}.yaml`, §9 구조). `helm lint` 통과 + `helm template \| kubectl apply --dry-run=server`로 API 서버 스키마 검증까지 통과 | `values-local.yaml`은 `mock-20260811-amd64` 이미지를 기본값으로 사용. `image.repository`(ECR URL, 계정ID 포함)는 정적 값 — Terraform output에서 자동 동기화 안 됨, 계정 구조 바뀌면(§13 TODO) 수동 갱신 필요 |
+| 2026-08-11 | `local/eks` destroy (ECR 제외) | `kubectl delete ingress`로 ALB부터 먼저 정리(§4 "ALB 고아 자원" 참고) → 확인 후 클러스터+노드그룹+ALB Controller/Karpenter Role 등 16개를 `-target`으로 지정해 destroy, ECR 6개는 유지 | 이 Terraform 버전(1.15.8)엔 `-exclude` 플래그가 없어서(§4 참고) `terraform state list`로 뽑은 목록에서 ECR만 걸러 `-target`을 16개 나열하는 방식으로 처리 |
 
 ### 보안그룹 description의 ASCII 제약 (2026-08-04)
 
@@ -206,6 +216,36 @@ InvalidParameterException: Password should be configured as one of the allowed f
 - **조치**: `allowed_first_auth_factors` 기본값을 `["PASSWORD", "EMAIL_OTP"]`로 변경해서 재apply, 3개 전부 성공. `slash-web`의 `LoginPage.tsx`는 애초에 `PASSWORD` 챌린지를 요청하지 않고 `EMAIL_OTP`만 쓰므로, User Pool이 `PASSWORD`를 "허용"하고 있어도 실제 로그인 화면에 비밀번호 입력란이 나오는 건 아니다 — AWS API 제약과 실제 앱 UX는 별개.
 - **교훈**: Cognito의 "1차 인증 수단"은 User Pool이 뭘 **허용**하는지 목록이지, 클라이언트가 뭘 **강제로 요구**받는지가 아니다. `PASSWORD`를 목록에 넣는 게 "비밀번호 로그인을 지원한다"는 뜻은 아니고, 그냥 Cognito가 요구하는 최소 조건을 채운 것 — 실제 어떤 챌린지를 쓸지는 앱(프론트/`slash-api`)이 `InitiateAuth` 호출 시 고르는 문제다.
 - **교훈**: CloudFront+S3 OAC+SPA 조합에서는 **404뿐 아니라 403도 같이 처리**해야 한다 — `s3:ListBucket`을 안 주는 게(권장되는 최소 권한) 오히려 에러 코드를 바꿔버리는 부작용이 있다는 걸 몰랐음.
+
+### 로컬(Apple Silicon) 빌드 이미지와 EKS 노드 아키텍처 불일치 (2026-08-11)
+
+`mock-services/`의 세 이미지를 `mock-20260811` 태그로 push하고 EKS에 파드로 배포했더니 전부 `Error` 상태로 재시작을 반복했다.
+
+```
+$ kubectl logs -l app=slash-api-mock
+exec /usr/local/bin/python: exec format error
+```
+
+- **원인**: 이미지를 빌드한 맥북이 Apple Silicon(arm64)이라, `docker build`(플랫폼 미지정)가 기본으로 arm64 이미지를 만들었다. 반면 `modules/eks/node_group.tf`의 `node_instance_type` 기본값(`t3.medium`)은 x86_64(amd64) 계열이라, 노드 커널이 arm64 바이너리를 실행하지 못해 즉시 죽었다. EKS는 이미지 pull 자체는 성공(`kubectl describe pod`에 `Pulled` 이벤트가 정상적으로 찍힘)하기 때문에, 이미지가 없거나 권한이 없는 문제가 아니라 아키텍처만 안 맞는 경우 로그를 직접 봐야 원인이 보인다.
+- **부수적으로 겪은 문제**: `docker build --platform linux/amd64`/`docker pull --platform linux/amd64`를 줘도 Colima의 legacy builder(`docker buildx`가 기본 비활성)가 이를 무시하고 계속 arm64로 빌드했다. `~/.docker/cli-plugins/docker-buildx`가 Docker Desktop 앱을 가리키는 깨진 심볼릭 링크였던 게 원인 — `brew install docker-buildx` 후 `/opt/homebrew/opt/docker-buildx/bin/docker-buildx`로 링크를 다시 걸고 `docker buildx create --use`로 별도 builder를 띄우고 나서야 `--platform linux/amd64`가 실제로 적용됐다.
+- **조치**: `mock-20260811-amd64` 태그로 buildx 재빌드 → push → `kubectl set image`로 배포 교체, 3개 서비스 전부 `Running` + `/health` 응답 확인.
+- **교훈**: Apple Silicon 맥북에서 빌드한 이미지를 x86_64 EKS 노드에 올릴 계획이면, 로컬 `docker build`만으로는 부족하다 — `docker buildx build --platform linux/amd64`(buildx가 정상 연결돼 있는지 먼저 확인)를 쓰거나, CI(GitHub Actions 러너는 보통 amd64)에서 빌드하는 걸 기본으로 삼는 게 안전하다. 노드그룹을 Graviton(arm64, `t4g.*`)으로 바꾸는 대안도 있지만, 실제 서비스 CI가 amd64 러너를 쓸 가능성이 높아 이번엔 이미지 쪽을 고쳤다.
+
+### ALB Controller가 만든 ALB는 Terraform이 모른다 — 클러스터 destroy 전에 먼저 지워야 함 (2026-08-11)
+
+ALB Controller 검증용으로 만든 테스트 Ingress를 그대로 둔 채 EKS 클러스터를 destroy하려던 참에 짚은 문제.
+
+- **원인**: `alb.ingress.kubernetes.io/scheme: internet-facing` Ingress를 적용하면 ALB Controller가 **Terraform이 전혀 모르는 실제 ALB/타겟그룹/리스너**를 AWS에 만든다. 클러스터(즉 ALB Controller 파드)를 먼저 지워버리면, 그 컨트롤러가 담당 리소스를 정리할 기회 자체가 없어져서 ALB가 **고아 자원으로 계정에 영원히 남는다** — Terraform state에도 없고 콘솔에서 우연히 찾기 전까지는 계속 과금된다.
+- **조치**: 클러스터 destroy 전에 `kubectl delete ingress <name>`을 먼저 실행 → `aws elbv2 describe-load-balancers`로 ALB가 실제로 사라진 것까지 확인 → 그다음에 `terraform destroy` 진행. 이번엔 문제없이 정리됨.
+- **교훈**: ALB/NLB Controller, ExternalDNS처럼 **K8s 리소스가 트리거해서 AWS 자원을 만드는 컨트롤러**를 쓰는 클러스터는, destroy 순서에 "그 컨트롤러가 만든 K8s 리소스부터 지우기"를 항상 첫 단계로 넣어야 한다 — Terraform destroy만 믿으면 놓친다.
+
+### Terraform 1.15.8엔 `-exclude` 플래그가 없음 (2026-08-11)
+
+ECR은 남기고 나머지만 destroy하려고 `terraform destroy -exclude=...`를 시도했다가 "flag provided but not defined" 에러를 만났다.
+
+- **원인**: `-exclude`(target의 반대, "이것만 빼고 전부")는 실제로 존재하는 플래그가 아니다 — 착각이었다. Terraform은 `-target`(이것만 포함)만 지원한다.
+- **조치**: `terraform state list`로 전체 리소스를 뽑은 뒤 `grep -v`로 ECR 관련 6개를 제외하고, 나머지 16개를 전부 `-target`으로 나열해서 destroy했다.
+- **교훈**: "일부만 빼고 나머지 전부"가 필요하면 `-target` 여러 개를 나열하는 것 말고 방법이 없다 — 리소스가 많으면 `terraform state list | grep -v ...`로 목록을 뽑아 스크립트로 `-target` 인자를 생성하는 편이 손으로 나열하는 것보다 안전하다.
 
 ## 5. Destroy 절차
 
