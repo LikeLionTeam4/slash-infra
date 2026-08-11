@@ -169,7 +169,7 @@ local/dev/prod 3단계로 나눈다. **계정 공유 여부는 환경마다 다�
 | 환경 | 역할 | 스펙 | 계정 | 상태 |
 | --- | --- | --- | --- | --- |
 | **local** | 개인 맥북에서 `terraform apply`하는 실험용 — 모듈 변경을 실제 AWS에서 검증 | 최소 구성 (`environments/local/*` 그대로) | **팀원마다 다른 계정** (부트캠프 계정이 개인별 발급) — 서로 공유·의존 없이 각자 독립 적용. 자세한 건 [README §다른 AWS 계정에서 시작하기](../README.md#다른-aws-계정에서-시작하기-팀원용) | `network`/`frontend` 구축, RDS/EKS는 다음 단계 |
-| **dev** | prod와 거의 동일한 스펙을 유지하는 공유 테스트 서버 — 팀 전체가 QA에 사용 | prod와 동일 모듈, 동일 값(인스턴스 크기 등) | 미정 — 착수 시 결정 | 미구축 — local이 안정화된 뒤 착수 |
+| **dev** | prod와 거의 동일한 스펙을 유지하는 공유 테스트 서버 — 팀 전체가 QA에 사용 | prod와 동일 모듈, 동일 값(인스턴스 크기 등) | **이 계정(`727646470302`)으로 확정**(2026-08-11, [이슈 #13](https://github.com/LikeLionTeam4/slash-infra/issues/13)) — prod와 같은 계정을 공유, `Environment=dev` 태그와 리소스명 접미사(`-dev`)로만 구분 | 미구축 — 착수 대기 |
 | **prod** | 실제 운영 환경 | Multi-AZ, 가용성 우선 | **이 계정(`727646470302`)으로 확정.** `sbsh.cloud` 도메인 위임(가비아 NS)이 이미 이 계정의 Route53 zone을 가리키고 있어서, prod의 apex 도메인(§2)도 결국 이 계정에 있어야 한다 — 별도 prod 계정으로 나중에 재위임하지 않기로 함. 나머지 담당자는 이 계정에 IAM 사용자만 추가 | 미구축 |
 
 - local에서 검증된 모듈을 그대로 dev/prod에 재사용한다 — 모듈 코드 자체는 세 환경이 동일하고, `environments/<env>/` root의 변수 값만 다르다.
@@ -193,7 +193,7 @@ local/dev/prod 3단계로 나눈다. **계정 공유 여부는 환경마다 다�
 
 다음 인터뷰 라운드에서 채워야 할 항목:
 
-- dev 환경의 계정 구조 — local처럼 팀원 각자 다른 계정에서 독립 적용할지, prod처럼 담당자 몇 명이 계정 하나를 공유할지 (§11, 착수 시 결정)
+- ~~dev 환경의 계정 구조~~ → prod와 같은 계정(`727646470302`)을 공유하는 것으로 확정(2026-08-11, §11, [이슈 #13](https://github.com/LikeLionTeam4/slash-infra/issues/13)). 다음 단계는 `environments/dev/` 착수
 - `slash_demo` DB를 실제로 어떻게 만들지 — SSM 포트포워딩으로 직접 접속할지, EKS 안의 일회성 Job으로 처리할지 (§7-1)
 - Karpenter 실제 설치(Helm, NodePool/EC2NodeClass) — IRSA Role은 `eks` 모듈에 준비됐지만 한 번도 설치해본 적 없음(§5)
 - ~~ALB Ingress Controller 실제 설치~~ → IRSA Role apply + Helm 설치 + mock 이미지로 실제 ALB 응답까지 검증 완료(2026-08-11, §8). 도메인/ACM 연결과 상시 운영은 dev 환경 구축 후([이슈 #10](https://github.com/LikeLionTeam4/slash-infra/issues/10))
