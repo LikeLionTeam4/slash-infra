@@ -1,0 +1,202 @@
+<mxfile host="app.diagrams.net" agent="slash-infra" version="24.0.0">
+  <diagram name="local 아키텍처" id="local-arch">
+    <mxGraphModel dx="1600" dy="900" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1900" pageHeight="1450" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+
+        <!-- External actors -->
+        <mxCell id="gh_infra" value="GitHub&#10;slash-infra (dev 브랜치)&#10;helm/, argocd/" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="20" y="20" width="200" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="gh_web" value="GitHub&#10;slash-web (dev 브랜치)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="240" y="20" width="200" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="gh_actions" value="GitHub Actions&#10;(slash-web CI/CD, OIDC)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="20" y="100" width="200" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="user" value="사용자 브라우저" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="820" y="20" width="180" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="route53" value="Route53&#10;sbsh.cloud hosted zone&#10;(environments/bootstrap)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="820" y="100" width="180" height="60" as="geometry" />
+        </mxCell>
+
+        <!-- AWS account boundary -->
+        <mxCell id="aws_boundary" value="AWS Account 727646470302 · ap-northeast-2 — local 프로필 (environments/local/*)" style="rounded=0;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#232F3E;dashed=1;verticalAlign=top;align=left;fontSize=14;fontStyle=1;spacingLeft=10;spacingTop=8;" vertex="1" parent="1">
+          <mxGeometry x="0" y="200" width="1840" height="1210" as="geometry" />
+        </mxCell>
+
+        <!-- Account-level / regional services -->
+        <mxCell id="s3_cf" value="S3 + CloudFront&#10;프론트엔드 — local.sbsh.cloud&#10;(local/frontend, 상시 적용)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="560" y="230" width="220" height="70" as="geometry" />
+        </mxCell>
+        <mxCell id="iam_fe" value="IAM Role&#10;slash-frontend-deploy-local&#10;(GitHub OIDC 신뢰)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="560" y="320" width="220" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="cognito" value="Cognito User Pool&#10;slash-users-local&#10;이메일+비밀번호 · Managed Login&#10;(local/cognito, 상시 적용)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="800" y="230" width="220" height="70" as="geometry" />
+        </mxCell>
+        <mxCell id="ecr" value="ECR&#10;slash-api / slash-nlu / slash-llm&#10;(local/eks, 상시 적용)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="1040" y="230" width="220" height="70" as="geometry" />
+        </mxCell>
+        <mxCell id="secrets" value="Secrets Manager&#10;RDS / Valkey 자격증명" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="1280" y="230" width="220" height="70" as="geometry" />
+        </mxCell>
+        <mxCell id="cloudtrail" value="CloudTrail (bootstrap)&#10;코드 완료 · 현재 미적용" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;dashed=1;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="1040" y="320" width="220" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="cloudwatch" value="CloudWatch 알람 + SNS&#10;(local/observability)&#10;검증 완료 · 현재 미적용" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;dashed=1;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="1280" y="320" width="220" height="60" as="geometry" />
+        </mxCell>
+
+        <!-- Internet cloud -->
+        <mxCell id="internet" value="Internet" style="ellipse;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="1700" y="20" width="120" height="60" as="geometry" />
+        </mxCell>
+
+        <!-- VPC -->
+        <mxCell id="vpc" value="VPC slash-vpc-local · 10.0.0.0/16 (local/network)" style="rounded=0;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#1a73e8;dashed=1;verticalAlign=top;align=left;fontSize=13;fontStyle=1;spacingLeft=8;spacingTop=8;" vertex="1" parent="1">
+          <mxGeometry x="40" y="420" width="1760" height="680" as="geometry" />
+        </mxCell>
+        <mxCell id="igw" value="Internet Gateway" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="900" y="450" width="140" height="40" as="geometry" />
+        </mxCell>
+
+        <!-- AZ-a -->
+        <mxCell id="az_a" value="ap-northeast-2a" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#f0f7ff;strokeColor=#6c8ebf;dashed=1;verticalAlign=top;align=left;fontSize=12;fontStyle=1;spacingLeft=8;spacingTop=8;" vertex="1" parent="1">
+          <mxGeometry x="80" y="500" width="840" height="560" as="geometry" />
+        </mxCell>
+        <mxCell id="pub_a" value="Public Subnet · 10.0.0.0/24" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;verticalAlign=top;align=left;fontSize=11;fontStyle=1;spacingLeft=6;spacingTop=6;opacity=70;" vertex="1" parent="1">
+          <mxGeometry x="110" y="540" width="780" height="110" as="geometry" />
+        </mxCell>
+        <mxCell id="nat" value="NAT Gateway&#10;(local: nat_gateway_per_az=false&#10;→ AZ-a에 1개만, AZ-c와 공유)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="140" y="575" width="200" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="alb" value="ALB (internet-facing)&#10;ALB Controller가 Ingress로 생성&#10;검증 시에만 존재 (상시 아님)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;dashed=1;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="460" y="575" width="240" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="priv_app_a" value="Private-app Subnet · 10.0.10.0/24" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;verticalAlign=top;align=left;fontSize=11;fontStyle=1;spacingLeft=6;spacingTop=6;opacity=70;" vertex="1" parent="1">
+          <mxGeometry x="110" y="670" width="780" height="170" as="geometry" />
+        </mxCell>
+        <mxCell id="node1" value="EC2 Node&#10;ip-10-0-10-73 (t3.medium)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="140" y="710" width="220" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="node2" value="EC2 Node&#10;ip-10-0-10-80 (t3.medium)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="400" y="710" width="220" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="priv_db_a" value="Private-db Subnet · 10.0.20.0/24" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;verticalAlign=top;align=left;fontSize=11;fontStyle=1;spacingLeft=6;spacingTop=6;opacity=70;" vertex="1" parent="1">
+          <mxGeometry x="110" y="860" width="780" height="140" as="geometry" />
+        </mxCell>
+        <mxCell id="rds" value="RDS PostgreSQL&#10;db.t4g.small · slash_dev + slash_demo&#10;Multi-AZ 비활성 (local 오버라이드)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d4f1f4;strokeColor=#0e8088;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="140" y="900" width="340" height="70" as="geometry" />
+        </mxCell>
+        <mxCell id="valkey" value="Valkey (ElastiCache)&#10;cache.t4g.micro&#10;num_cache_clusters=1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d4f1f4;strokeColor=#0e8088;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="520" y="900" width="320" height="70" as="geometry" />
+        </mxCell>
+
+        <!-- AZ-c -->
+        <mxCell id="az_c" value="ap-northeast-2c" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#f0f7ff;strokeColor=#6c8ebf;dashed=1;verticalAlign=top;align=left;fontSize=12;fontStyle=1;spacingLeft=8;spacingTop=8;" vertex="1" parent="1">
+          <mxGeometry x="960" y="500" width="800" height="560" as="geometry" />
+        </mxCell>
+        <mxCell id="pub_c" value="Public Subnet · 10.0.1.0/24&#10;(NAT 없음 — local은 AZ-a NAT 공유)" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;verticalAlign=top;align=left;fontSize=11;fontStyle=1;spacingLeft=6;spacingTop=6;opacity=70;" vertex="1" parent="1">
+          <mxGeometry x="990" y="540" width="740" height="110" as="geometry" />
+        </mxCell>
+        <mxCell id="priv_app_c" value="Private-app Subnet · 10.0.11.0/24" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;verticalAlign=top;align=left;fontSize=11;fontStyle=1;spacingLeft=6;spacingTop=6;opacity=70;" vertex="1" parent="1">
+          <mxGeometry x="990" y="670" width="740" height="170" as="geometry" />
+        </mxCell>
+        <mxCell id="node3" value="EC2 Node&#10;ip-10-0-11-231 (t3.medium)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="1020" y="710" width="220" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="priv_db_c" value="Private-db Subnet · 10.0.21.0/24&#10;(Standby 없음 — Multi-AZ 비활성)" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;verticalAlign=top;align=left;fontSize=11;fontStyle=1;spacingLeft=6;spacingTop=6;opacity=70;" vertex="1" parent="1">
+          <mxGeometry x="990" y="860" width="740" height="140" as="geometry" />
+        </mxCell>
+
+        <!-- EKS / K8s workloads panel -->
+        <mxCell id="eks_panel" value="EKS 클러스터 slash-eks-local — 노드그룹 general (t3.medium × 3, desired=3/min=2/max=4)에 스케줄링되는 K8s 리소스" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#f5f0fa;strokeColor=#9673a6;dashed=1;verticalAlign=top;align=left;fontSize=13;fontStyle=1;spacingLeft=10;spacingTop=8;" vertex="1" parent="1">
+          <mxGeometry x="60" y="1120" width="1720" height="270" as="geometry" />
+        </mxCell>
+        <mxCell id="alb_controller" value="kube-system&#10;AWS Load Balancer Controller (Helm)&#10;IRSA: slash-alb-controller-local&#10;검증 시에만 설치" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;dashed=1;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="100" y="1170" width="300" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="argocd" value="argocd 네임스페이스&#10;ArgoCD (Helm argo-cd v7.7.11)&#10;검증 시에만 설치 — 이슈 #10" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;dashed=1;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="440" y="1170" width="300" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="workloads" value="default 네임스페이스&#10;slash-api / slash-nlu / slash-llm&#10;Deployment + Service (+Ingress)&#10;image: mock-20260811-amd64" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="780" y="1170" width="340" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="karpenter" value="Karpenter 컨트롤러&#10;IRSA Role만 준비&#10;실제 설치 안 함 (TODO)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;dashed=1;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="1160" y="1170" width="280" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="eks_note" value="참고: 이 패널의 K8s 리소스(ALB Controller / ArgoCD / 워크로드)는 EKS 클러스터 자체가 검증 라운드마다 apply→검증→destroy를 반복하기 때문에 상시 떠 있지 않다. 재현 순서는 docs/operations-log.md §5, argocd/README.md, helm/README.md 참고." style="text;html=1;align=left;valign=top;fontSize=10;fontColor=#666666;whiteSpace=wrap;" vertex="1" parent="1">
+          <mxGeometry x="100" y="1270" width="1640" height="60" as="geometry" />
+        </mxCell>
+
+        <!-- Edges -->
+        <mxCell id="e1" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;fontSize=10;" edge="1" parent="1" source="user" target="route53">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e2" value="alias record" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;fontSize=10;" edge="1" parent="1" source="route53" target="s3_cf">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e2b" value="API 요청 (검증 시)" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;fontSize=10;dashed=1;" edge="1" parent="1" source="user" target="alb">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e3" value="push (dev)" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;fontSize=10;" edge="1" parent="1" source="gh_web" target="gh_actions">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e4" value="OIDC AssumeRole" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;fontSize=10;" edge="1" parent="1" source="gh_actions" target="iam_fe">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e5" value="s3 sync + CF invalidation" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;fontSize=10;" edge="1" parent="1" source="iam_fe" target="s3_cf">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e6" value="로그인 (Authorization Code+PKCE)" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;fontSize=10;" edge="1" parent="1" source="user" target="cognito">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e7" value="git pull: helm/ (dev) + values-local.yaml" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;fontSize=10;" edge="1" parent="1" source="argocd" target="gh_infra">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e8" value="sync (automated, selfHeal)" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;fontSize=10;" edge="1" parent="1" source="argocd" target="workloads">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e9" value="이미지 pull" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;fontSize=10;dashed=1;" edge="1" parent="1" source="workloads" target="ecr">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e10" value="라우팅 (slash-api Ingress)" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;fontSize=10;" edge="1" parent="1" source="alb" target="workloads">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e11" value="IRSA 자격증명 조회" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;fontSize=10;dashed=1;" edge="1" parent="1" source="workloads" target="secrets">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e12" value="DB 접근" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;fontSize=10;" edge="1" parent="1" source="workloads" target="rds">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e13" value="캐시 접근" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;fontSize=10;" edge="1" parent="1" source="workloads" target="valkey">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e14" value="CPU/Storage 모니터링" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;fontSize=10;dashed=1;" edge="1" parent="1" source="cloudwatch" target="rds">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e15" value="스케줄링" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;fontSize=10;dashed=1;" edge="1" parent="1" source="node1" target="workloads">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e16" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;fontSize=10;" edge="1" parent="1" source="node1" target="nat">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e17" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;fontSize=10;" edge="1" parent="1" source="node3" target="nat">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e18" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;fontSize=10;" edge="1" parent="1" source="nat" target="igw">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e19" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;fontSize=10;" edge="1" parent="1" source="igw" target="internet">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e20" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;fontSize=10;" edge="1" parent="1" source="alb" target="igw">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
