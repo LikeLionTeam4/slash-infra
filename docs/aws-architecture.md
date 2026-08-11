@@ -123,7 +123,7 @@ Slash 프로젝트 전체(웹 프론트엔드 제외 백엔드 서비스군)를 
 ## 9. CI/CD 파이프라인
 
 - GitHub Actions: 각 서비스 저장소(`slash-api`, `slash-nlu`, `slash-llm`)에서 빌드 → 테스트 → ECR push.
-- ArgoCD가 이 저장소의 `helm/` 디렉터리를 보고 EKS에 GitOps 방식으로 배포 — 이미지 태그 업데이트는 PR/커밋으로 반영(위치 결정은 §13 참고, ArgoCD 설치 자체는 아직 미구현 — [이슈 #10](https://github.com/LikeLionTeam4/slash-infra/issues/10)).
+- ArgoCD가 이 저장소의 `helm/` 디렉터리를 보고 EKS에 GitOps 방식으로 배포 — 이미지 태그 업데이트는 PR/커밋으로 반영(위치 결정은 §13 참고). **ArgoCD 설치 + "Git 커밋 → 자동 배포" 흐름 자체는 local 클러스터에서 검증 완료**(2026-08-11) — `argocd/` 디렉터리 참고, Application 3개(`helm/slash-api`·`slash-nlu`·`slash-llm` + `values-local.yaml`) 등록 후 `values-local.yaml` 커밋을 실제로 push해 자동 sync(스케일 업/다운 왕복) 확인, 검증 후 destroy(운영 로그 참고). dev 환경 자체가 미구축이라 상시 운영은 아직([이슈 #10](https://github.com/LikeLionTeam4/slash-infra/issues/10), dev 착수 시 `values-dev.yaml` 기준으로 전환).
 - Helm chart 구조: `helm/`로 구현 완료(2026-08-11). 서비스별 디렉터리(`helm/slash-api/`, `helm/slash-nlu/`, `helm/slash-llm/`) + 환경별 values 파일(`values-local.yaml`/`values-dev.yaml`/`values-prod.yaml`)로 분리. `values-local.yaml`은 `mock-services/`가 push한 placeholder 이미지로 `helm lint`/`helm template`/`kubectl apply --dry-run=server` 검증까지 마침 — 실제 EKS apply는 검증 후 destroy(§운영 로그).
 - **적용 범위: local 제외, dev부터 이 파이프라인 전체(GitHub Actions + ArgoCD)를 적용한다.** local은 개인이 직접 `terraform apply`/수동 배포하는 실험용이라 CI/CD 자동화가 필요 없다 (§11).
 
@@ -197,7 +197,7 @@ local/dev/prod 3단계로 나눈다. **계정 공유 여부는 환경마다 다�
 - `slash_demo` DB를 실제로 어떻게 만들지 — SSM 포트포워딩으로 직접 접속할지, EKS 안의 일회성 Job으로 처리할지 (§7-1)
 - Karpenter 실제 설치(Helm, NodePool/EC2NodeClass) — IRSA Role은 `eks` 모듈에 준비됐지만 한 번도 설치해본 적 없음(§5)
 - ~~ALB Ingress Controller 실제 설치~~ → IRSA Role apply + Helm 설치 + mock 이미지로 실제 ALB 응답까지 검증 완료(2026-08-11, §8). 도메인/ACM 연결과 상시 운영은 dev 환경 구축 후([이슈 #10](https://github.com/LikeLionTeam4/slash-infra/issues/10))
-- ArgoCD 설치 및 GitOps 저장소 구조 — `helm/` 위치는 결정됐지만(위 항목) ArgoCD 자체는 미설치([이슈 #10](https://github.com/LikeLionTeam4/slash-infra/issues/10))
+- ~~ArgoCD 설치 및 GitOps 저장소 구조~~ → `helm/` 위치 결정 + local 클러스터에서 ArgoCD 설치·GitOps 자동 배포 왕복 검증까지 완료(2026-08-11, §9, [이슈 #10](https://github.com/LikeLionTeam4/slash-infra/issues/10)). dev 계정 구조가 정해지고 dev 환경이 실제로 구축되면 같은 `argocd/` manifest를 `values-dev.yaml` 기준으로 옮겨 상시 운영 전환
 - GPU 인스턴스 정확한 타입/개수, 예상 동시 요청 수 (Gemma 모델 크기에 따라 필요 VRAM이 달라짐)
 - `slash-nlu`의 컴퓨트 요구사항 (CPU 규모, 메모리) — Kiwi 기반이라 GPU는 불필요할 것으로 추정하나 확정 필요
 - prod 환경의 네임스페이스 분리 vs 클러스터 분리 (§11)
