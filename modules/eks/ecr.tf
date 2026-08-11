@@ -48,6 +48,18 @@ resource "aws_ecr_lifecycle_policy" "services" {
           countNumber   = 10
         }
         action = { type = "expire" }
+      },
+      {
+        rulePriority = 3
+        description  = "mock- 접두어 이미지(파이프라인 검증용 placeholder)는 3일 후 정리"
+        selection = {
+          tagStatus     = "tagged"
+          tagPrefixList = ["mock"]
+          countType     = "sinceImagePushed"
+          countUnit     = "days"
+          countNumber   = 3
+        }
+        action = { type = "expire" }
       }
     ]
   })

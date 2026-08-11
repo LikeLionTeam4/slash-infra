@@ -1,0 +1,5 @@
+# local은 CI/CD 대상이 아니다(§11) — 실제 Dockerfile이 아직 없어 mock 이미지로 배선만 검증한다.
+image:
+  tag: mock-20260811-amd64
+
+replicaCount: 1

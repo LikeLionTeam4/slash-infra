@@ -1,0 +1,28 @@
+# slash-api가 클러스터 내부 DNS로만 호출한다 — 외부 노출 없음, Ingress 없음.
+# GPU 노드그룹은 아직 없음(docs/aws-architecture.md §5, §13 TODO) — 준비되면
+# nodeSelector/tolerations를 values-dev.yaml/values-prod.yaml에서 채운다.
+# repository는 정적 값이다 — slash-api/values.yaml과 같은 이유(§11, §13 TODO 참고).
+image:
+  repository: 727646470302.dkr.ecr.ap-northeast-2.amazonaws.com/slash-llm
+  tag: "" # values-<env>.yaml에서 반드시 채운다
+
+replicaCount: 1
+
+serviceAccount:
+  roleArn: ""
+
+service:
+  port: 80
+  targetPort: 8000
+
+env: {}
+
+nodeSelector: {}
+tolerations: []
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    memory: 256Mi

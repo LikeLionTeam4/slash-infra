@@ -1,0 +1,6 @@
+apiVersion: v2
+name: slash-llm
+description: Slash LLM 서비스 — Gemma 추론, 요약·대화 생성
+type: application
+version: 0.1.0
+appVersion: "0.1.0"

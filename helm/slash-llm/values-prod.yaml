@@ -1,0 +1,6 @@
+# prod 환경 미구축, GPU 노드그룹도 미구축(§13 TODO) — 착수 시 image.tag와 함께
+# nodeSelector/tolerations도 채운다.
+image:
+  tag: "" # CI가 커밋 SHA로 갱신
+
+replicaCount: 1
