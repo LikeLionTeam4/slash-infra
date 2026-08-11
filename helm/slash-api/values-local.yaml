@@ -11,4 +11,4 @@ ingress:
   enabled: true
   host: "" # 비워두면 ALB의 기본 DNS 이름으로 접근 (도메인 연결 없이 스모크 테스트용)
 
-replicaCount: 1
+replicaCount: 2
