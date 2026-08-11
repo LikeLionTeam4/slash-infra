@@ -6,7 +6,7 @@ Slash AWS 인프라. 역할별 재사용 모듈(`modules/`)과 이를 조합하�
 modules/
   frontend-hosting/  # S3 + CloudFront + ACM + Route53 — 정적 프론트엔드 호스팅
   network/           # VPC + 3-tier 서브넷 + SG(EKS/DB) + S3 Gateway Endpoint + VPC Flow Log
-  eks/               # EKS 클러스터 + 범용 노드그룹 + IRSA(OIDC) + Karpenter Role + ECR
+  eks/               # EKS 클러스터 + 범용 노드그룹 + IRSA(OIDC) + Karpenter Role + ALB Controller Role + ECR
   database/          # RDS PostgreSQL + Valkey(ElastiCache) + Secrets Manager
   observability/     # CloudWatch 알람(RDS CPU/스토리지) + SNS 알림
 environments/
@@ -14,11 +14,13 @@ environments/
   local/              # 개인 맥북에서 배포하는 실험용 환경
     frontend/         # frontend-hosting 모듈을 local 값으로 조합
     network/          # network 모듈을 local 값으로 조합 (NAT 1개로 비용 절감)
-    eks/              # eks 모듈을 local 값으로 조합 (아직 미적용 — 비용 커서 별도 확인 후 apply)
+    eks/              # eks 모듈을 local 값으로 조합 (ECR만 적용 중 — 클러스터는 검증 후 destroy, 운영 로그 참고)
     database/         # database 모듈을 local 값으로 조합 (아직 미적용, Multi-AZ 비활성으로 비용 절감)
     observability/    # observability 모듈을 local 값으로 조합 (아직 미적용)
   dev/                # prod와 거의 동일한 스펙을 유지하는 공유 테스트 서버 (아직 미구축)
   prod/               # 실제 운영 환경 (아직 미구축)
+helm/                 # slash-api/nlu/llm Helm chart (서비스별 디렉터리 + 환경별 values, ArgoCD가 볼 대상)
+mock-services/        # 실 서비스 Dockerfile이 없는 동안 ECR/EKS/Helm 파이프라인을 검증하는 placeholder 이미지
 ```
 
 local/dev/prod는 (같은 사람이 적용한다면) 같은 AWS 계정을 리소스명·태그로만 구분해 쓴다
@@ -52,16 +54,19 @@ terraform plan   # 유효한 AWS 자격증명 필요 (aws sts get-caller-identit
 
 ## 다음 단계 (아직 미구현)
 
-`docs/aws-architecture.md`에 설계는 정리되어 있지만 아직 모듈이 없는 부분:
+`docs/aws-architecture.md`에 설계는 정리되어 있지만 아직 모듈이 없거나 완전히 안 끝난 부분:
 
-- GPU 노드그룹(`slash-llm`용, §5) — 범용 노드그룹은 `eks` 모듈로 구현 완료, GPU는 인스턴스 타입/개수 미정
-- Karpenter 실제 설치(Helm, NodePool/EC2NodeClass) + ALB Ingress Controller 설치(§8) — 둘 다 IRSA Role은 `eks` 모듈에 준비돼 있지만, 컨트롤러 자체는 K8s 내부 리소스라 GitOps로 별도 설치
-- API용 ALB Ingress + ACM(§8) — 위 ALB Controller가 실제로 떠 있어야 의미 있음
-- ALB 5xx/GPU 사용률 알람(§10) — 위 둘이 생기면 `observability` 모듈에 추가
+- GPU 노드그룹(`slash-llm`용, §5) — 범용 노드그룹은 `eks` 모듈로 구현 완료, GPU는 인스턴스 타입/개수 미정 ([이슈 #13](https://github.com/LikeLionTeam4/slash-infra/issues/13))
+- Karpenter 실제 설치(Helm, NodePool/EC2NodeClass) — IRSA Role은 `eks` 모듈에 준비돼 있지만 아직 한 번도 설치해본 적 없음(컨트롤러 자체는 K8s 내부 리소스라 GitOps로 별도 설치)
+- ArgoCD 설치 + `helm/`을 Application으로 등록하는 GitOps 연결 ([이슈 #10](https://github.com/LikeLionTeam4/slash-infra/issues/10)) — `helm/`은 준비됐지만 아직 수동 `helm install`로만 검증
+- API용 ALB Ingress에 실제 도메인(`api.dev.sbsh.cloud`) + ACM 연결(§8) — ALB Controller 자체는 IRSA Role apply + Helm 설치 + mock 이미지로 실제 ALB 응답까지 검증 완료(2026-08-11), 도메인 연결은 dev 환경 자체가 미구축이라 아직
+- ALB 5xx/GPU 사용률 알람(§10) — 위 둘이 상시로 떠 있게 되면 `observability` 모듈에 추가
 
-`environments/local/{eks,database,observability}`는 코드 작성 + `plan` 검증까지 끝났지만
-**아직 apply 안 함** — EKS 컨트롤플레인이 월 ~$75로 지금까지 중 가장 비싸서 신중하게 진행 중
-([docs/operations-log.md](docs/operations-log.md) §1 마스터 표 참고).
+`environments/local/{eks,database,observability}`는 코드 작성 + `plan` 검증까지 끝났고, `eks`는
+ECR만 상시 적용 중(클러스터/ALB Controller/Helm chart는 apply→검증→destroy 완료, 재현 가능) —
+**EKS 컨트롤플레인이 월 ~$75로 지금까지 중 가장 비싸서 상시로 켜두지 않고 그때그때 검증 후
+정리하는 방식으로 진행 중**([docs/operations-log.md](docs/operations-log.md) §1 마스터 표 참고).
+`helm/README.md`, `mock-services/README.md`에 각각의 사용법이 정리되어 있다.
 
 ## State 백엔드 + DNS 부트스트랩 (최초 1회)
 
