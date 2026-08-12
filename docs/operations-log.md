@@ -432,7 +432,7 @@ local에서 검증된 모듈을 dev 스펙 값으로 재사용해 `environments/
 | # | 작업 | 상태 |
 | --- | --- | --- |
 | 8 | Karpenter 설치 + NodePool/EC2NodeClass (dev) | ✅ 완료(2026-08-12) — §8-1 |
-| 9 | metrics-server + HPA (dev) | ⬜ 진행 예정 |
+| 9 | metrics-server + HPA (dev) | ✅ 완료(2026-08-12) — §8-2 |
 | 10 | AWS Budgets (계정 전체, bootstrap) | ⬜ 진행 예정 |
 
 ### 8-1. Karpenter 설치 및 스케일 검증 (완료, 2026-08-12)
@@ -444,6 +444,13 @@ IRSA Role(`slash-karpenter-controller-dev`)은 이미 4단계(`dev/eks`)에서 �
 - NodePool에 `karpenter.k8s.aws/instance-generation Gt 2` 요구조건을 넣었더니 `operator: Gte`(작성한 적 없는 값)로 검증 에러 — 이 Karpenter 버전의 스키마 호환성 문제로 추정, 필수 조건이 아니라 제거하고 진행
 - **실제 스케일 검증**: cpu 1500m × 4 replica 테스트 파드 배포 → 기존 3개 노드에 못 들어가는 2개가 Pending → **24초 만에 새 노드(t계열) 프로비저닝**, 전부 `Running` 확인. 테스트 워크로드 삭제 → **145초 뒤 그 노드가 자동으로 정리**(consolidation, `consolidateAfter: 1m`)됨을 확인
 - 매니페스트는 `karpenter/dev/nodepool.yaml`(신규, `argocd/`와 같은 성격 — GitOps 대상 아닌 K8s 리소스라 커밋만 하고 `kubectl apply`로 직접 관리) + `karpenter/README.md`에 설치 절차·버전 호환성 주의사항 정리
+
+### 8-2. metrics-server + HPA (완료, 2026-08-12)
+
+- EKS는 `metrics-server`를 기본 포함하지 않아서 Helm으로 별도 설치(`kube-system`) — `kubectl top nodes`가 17초 만에 실제 CPU/메모리 지표를 반환하는 것 확인
+- `helm/slash-api`/`slash-nlu`/`slash-llm` 세 chart 전부에 `autoscaling` values 블록(기본 `enabled: false`) + `templates/hpa.yaml` 추가. **`autoscaling.enabled=true`일 때 `deployment.yaml`이 `spec.replicas` 필드 자체를 렌더링하지 않도록** 했다 — HPA와 정적 `replicaCount`가 동시에 그 필드를 놓고 다투면(Helm/ArgoCD sync가 계속 되돌리려 하고 HPA가 계속 바꾸려 하는 충돌) 오늘 Ingress에서 겪은 selfHeal 충돌과 같은 부류의 문제가 된다는 걸 미리 피한 것
+- `values-dev.yaml` 세 개 다 `autoscaling.enabled: true`로 켜서 push → ArgoCD가 155초 만에 sync → `kubectl get hpa`로 `slash-api`/`slash-nlu`/`slash-llm` 전부 생성 확인(`cpu: <unknown>/70%` — pod가 아직 없어서 예상된 상태, 이슈 #11 이후 실제 지표로 채워짐)
+- `slash-llm`은 GPU 노드그룹이 생기면(#12) GPU 사용률 기반 스케일링이 더 맞을 수 있다는 점을 values.yaml에 comment로 남김 — 그건 custom-metrics-adapter가 필요해 이번 범위 밖
 
 ## 9. 확장성 점검 (2026-08-12)
 
