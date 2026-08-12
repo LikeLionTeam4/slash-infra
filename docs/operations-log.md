@@ -336,7 +336,7 @@ AWS_PROFILE=slash-local terraform destroy -input=false
 | # | 시나리오 | 목적 | 상태 |
 | --- | --- | --- | --- |
 | 1 | 외부 저장소 코드 변경 시뮬레이션 (mock Dockerfile 수정 → 새 태그 build/push → `values-local.yaml` 갱신 → ArgoCD 자동 배포) | `slash-api`/`slash-nlu`/`slash-llm`에 아직 실제 Dockerfile/CI가 없는 상태에서, CI가 있었다면 벌어졌을 "코드 변경→새 이미지 배포" 전체 왕복을 재현 | ✅ 완료(2026-08-12) — 아래 참고 |
-| 2 | 배포 실패 → 롤백 (존재하지 않는 이미지 태그로 배포 시도 → 실패 감지 → git revert로 복구) | ArgoCD가 실패를 어떻게 드러내는지, 되돌리는 절차가 실제로 동작하는지 확인 | ⬜ 진행 예정 |
+| 2 | 배포 실패 → 롤백 (존재하지 않는 이미지 태그로 배포 시도 → 실패 감지 → git revert로 복구) | ArgoCD가 실패를 어떻게 드러내는지, 되돌리는 절차가 실제로 동작하는지 확인 | ✅ 완료(2026-08-12) — 아래 참고 |
 | 3 | Ingress + ALB 실제 트래픽 라우팅 (ALB Controller + ArgoCD 배포물 함께 구동) | 2026-08-11 ArgoCD 검증 라운드에서 ALB Controller를 재설치하지 않아 `Progressing`으로 남았던 Ingress를 실제 주소 할당·응답까지 닫기 | ⬜ 진행 예정 |
 | 4 | ArgoCD self-heal (수동 drift 후 자동 복구) | `syncPolicy.automated.selfHeal`이 git 커밋 없이 발생한 클러스터 직접 변경을 실제로 되돌리는지 확인 | ⬜ 진행 예정 |
 | 5 | 실제 의존성 주입 (RDS/Valkey/Cognito 값이 env/Secret으로 Deployment에 반영) | 배포 파이프라인은 되는데 서비스가 필요로 하는 실제 설정값은 안 들어가는 케이스를 사전에 잡기 | ⬜ 진행 예정 |
@@ -350,3 +350,10 @@ AWS_PROFILE=slash-local terraform destroy -input=false
 - 클러스터를 새로 apply한 직후라 ArgoCD/Application 3개도 처음부터 재설치·재등록해야 했다(§3 2026-08-12 ArgoCD 설치 항목과 동일 절차, `argocd/README.md` 참고) — destroy→재apply 사이에는 ArgoCD 자체도 클러스터와 함께 사라지므로 매번 다시 설치해야 한다는 걸 재확인.
 - 이번 라운드도 2026-08-11의 replicaCount 테스트와 마찬가지로 폴링에 macOS `timeout` 커맨드 대신 `SECONDS` 내장변수를 사용해 문제없이 진행됨.
 - 이 시나리오로 "config 값만 바뀐 배포"(2026-08-11)와 "실제 새 아티팩트가 배포되는" 경우가 ArgoCD 입장에서 동일하게(이미지 태그 변경 → 롤링 업데이트) 처리된다는 것도 확인됨 — 별도 파이프라인이 필요 없음.
+
+### 7-2. 시나리오 2 — 배포 실패 → 롤백 (완료, 2026-08-12)
+
+`values-local.yaml`의 `image.tag`를 ECR에 존재하지 않는 태그(`mock-20260812-typo-amd64`)로 바꿔 커밋+push. ArgoCD가 약 296초 뒤 감지해 sync → 새 파드가 `ImagePullBackOff`(`kubelet` 이벤트: `failed to resolve reference ...: not found`)로 대기하는 동안, **기존 파드는 그대로 `Running`을 유지**해 다운타임 없이 실패가 격리됨(Deployment의 기본 롤링업데이트 전략 덕분). `git revert`로 되돌리는 커밋을 push하자 약 160초 뒤 ArgoCD가 재sync해 정상 이미지로 롤백, `/health` 응답도 `version: "20260812-1"`(시나리오 1의 정상 버전)으로 원복 확인.
+
+- **주의할 점**: ArgoCD `Application`의 `status.health.status`는 배포 실패 이후에도, 롤백 이후에도 계속 `Progressing`으로 남아있었다 — 원인은 배포 실패와 무관하게 `Ingress` 리소스가 (이 라운드는 ALB Controller를 설치하지 않아서, §7-3 참고) `Progressing`으로 고정돼 있어 리소스 트리 전체의 최악값을 반영하는 Application 헬스를 끌어내리고 있었기 때문. `kubectl get application slash-api -o jsonpath='{.status.resources[*]}'`로 리소스별 헬스를 뜯어보면 `Deployment`는 정확히 `Healthy`/`Progressing`을 반영하고 있었음 — **Application 레벨 헬스만 보고 배포 성공 여부를 판단하면 안 되고, 리소스별 헬스를 봐야 한다**는 게 이번 시나리오의 핵심 교훈.
+- `ImagePullBackOff`는 `kubectl describe pod`의 Events(`Failed`, `BackOff`)로 바로 드러나서 원인 파악 자체는 빨랐음 — Argo UI/CLI만 보고 "그냥 Progressing"이라고 넘기지 말고 파드 이벤트까지 같이 봐야 한다는 점도 재확인.
