@@ -1,5 +1,11 @@
-# dev 환경 미구축 — 착수 시 아래 값을 채운다.
+# dev 환경 구축 진행 중(2026-08-12).
 image:
-  tag: "" # CI가 커밋 SHA로 갱신
+  tag: "" # CI가 커밋 SHA로 갱신 — 아직 없음(이슈 #11)
 
 replicaCount: 2
+
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 4
+  targetCPUUtilizationPercentage: 70

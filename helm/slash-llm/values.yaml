@@ -8,6 +8,14 @@ image:
 
 replicaCount: 1
 
+autoscaling:
+  # CPU 기준 HPA — GPU 노드그룹이 실제로 붙으면(#12) GPU 사용률 기반 스케일링이 더 맞을 수
+  # 있는데, 그건 custom-metrics-adapter 같은 별도 메트릭 소스가 필요해서 이번 범위 밖.
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 4
+  targetCPUUtilizationPercentage: 70
+
 serviceAccount:
   roleArn: ""
 

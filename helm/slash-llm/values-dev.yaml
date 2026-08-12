@@ -1,6 +1,12 @@
-# dev 환경 미구축, GPU 노드그룹도 미구축(§13 TODO) — 착수 시 image.tag와 함께
-# nodeSelector/tolerations도 채운다.
+# dev 환경 구축 진행 중(2026-08-12). GPU 노드그룹은 아직 미구축(§13 TODO, 이슈 #12) —
+# 착수 시 image.tag와 함께 nodeSelector/tolerations도 채운다.
 image:
-  tag: "" # CI가 커밋 SHA로 갱신
+  tag: "" # CI가 커밋 SHA로 갱신 — 아직 없음(이슈 #11)
 
 replicaCount: 1
+
+autoscaling:
+  enabled: true
+  minReplicas: 1
+  maxReplicas: 3
+  targetCPUUtilizationPercentage: 70

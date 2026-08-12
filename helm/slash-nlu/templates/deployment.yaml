@@ -5,7 +5,9 @@ metadata:
   labels:
     {{- include "slash-nlu.labels" . | nindent 4 }}
 spec:
+  {{- if not .Values.autoscaling.enabled }}
   replicas: {{ .Values.replicaCount }}
+  {{- end }}
   selector:
     matchLabels:
       {{- include "slash-nlu.selectorLabels" . | nindent 6 }}

@@ -7,6 +7,12 @@ image:
 
 replicaCount: 1
 
+autoscaling:
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 4
+  targetCPUUtilizationPercentage: 70
+
 serviceAccount:
   roleArn: ""
 

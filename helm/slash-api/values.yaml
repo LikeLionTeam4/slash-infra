@@ -8,6 +8,15 @@ image:
 
 replicaCount: 1
 
+autoscaling:
+  # true면 HPA가 replicaCount 대신 CPU 사용률로 파드 수를 관리한다. HPA와 정적 replicaCount가
+  # 동시에 Deployment.spec.replicas를 놓고 다투는 걸 막기 위해, enabled일 때는
+  # deployment.yaml이 replicas 필드 자체를 렌더링하지 않는다(templates/hpa.yaml 참고).
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 4
+  targetCPUUtilizationPercentage: 70
+
 serviceAccount:
   # IRSA Role ARN — environments/<env>/eks output의 값을 채운다 (§7-1, Secrets Manager 접근용)
   roleArn: ""
