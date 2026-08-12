@@ -339,7 +339,7 @@ AWS_PROFILE=slash-local terraform destroy -input=false
 | 2 | 배포 실패 → 롤백 (존재하지 않는 이미지 태그로 배포 시도 → 실패 감지 → git revert로 복구) | ArgoCD가 실패를 어떻게 드러내는지, 되돌리는 절차가 실제로 동작하는지 확인 | ✅ 완료(2026-08-12) — 아래 참고 |
 | 3 | Ingress + ALB 실제 트래픽 라우팅 (ALB Controller + ArgoCD 배포물 함께 구동) | 2026-08-11 ArgoCD 검증 라운드에서 ALB Controller를 재설치하지 않아 `Progressing`으로 남았던 Ingress를 실제 주소 할당·응답까지 닫기 | ✅ 완료(2026-08-12) — 아래 참고 |
 | 4 | ArgoCD self-heal (수동 drift 후 자동 복구) | `syncPolicy.automated.selfHeal`이 git 커밋 없이 발생한 클러스터 직접 변경을 실제로 되돌리는지 확인 | ✅ 완료(2026-08-12) — 아래 참고 |
-| 5 | 실제 의존성 주입 (RDS/Valkey/Cognito 값이 env/Secret으로 Deployment에 반영) | 배포 파이프라인은 되는데 서비스가 필요로 하는 실제 설정값은 안 들어가는 케이스를 사전에 잡기 | ⬜ 진행 예정 |
+| 5 | 실제 의존성 주입 (RDS/Valkey/Cognito 값이 env/Secret으로 Deployment에 반영) | 배포 파이프라인은 되는데 서비스가 필요로 하는 실제 설정값은 안 들어가는 케이스를 사전에 잡기 | ✅ 완료(2026-08-12, Cognito 범위) — 아래 참고 |
 
 검증 전 `environments/local/eks`를 네 번째로 재apply(§3 2026-08-12 항목)해서 클러스터를 다시 올렸다 — 5개 시나리오를 모두 마치면 §5 절차대로 destroy하고(ECR만 유지) 이 표의 상태를 최종 업데이트한다.
 
@@ -371,3 +371,10 @@ git 커밋 없이 `kubectl scale deploy slash-api --replicas=4`로 클러스터�
 
 - **§7-1/§7-2의 "새 커밋 감지"는 160~296초** 걸렸는데, 이번 **"이미 관리 중인 리소스의 drift 복구"는 3초 안팎**으로 훨씬 빨랐다. 원인 추정: 새 커밋 감지는 git 폴링 주기(기본 `timeout.reconciliation` 180초)를 타지만, self-heal은 ArgoCD가 이미 워치하고 있는 클러스터 리소스의 변경 이벤트(k8s watch/informer)에 바로 반응하기 때문 — "git → 클러스터" 방향은 폴링 지연이 있고, "클러스터가 git과 달라짐"은 거의 즉시 반응한다는 비대칭이 있다는 게 이번 시나리오의 핵심 확인 사항.
 - `syncPolicy.automated.selfHeal: true`가 `argocd/applications/*.yaml`에 이미 켜져 있어 별도 설정 변경 없이 바로 검증 가능했음.
+
+### 7-5. 시나리오 5 — 실제 의존성 주입, Cognito 범위 (완료, 2026-08-12)
+
+`helm/slash-api`의 `deployment.yaml`은 이미 `.Values.env` 맵을 순회해 컨테이너 env로 꽂아주는 로직이 있었지만, 지금까지 어떤 `values-*.yaml`도 이 맵을 채운 적이 없었다(전부 `env: {}`) — 배선은 있는데 실제로 값이 흘러간 적은 없던 상태. `values-local.yaml`에 `environments/local/cognito`의 실제 output(`user_pool_id`, `client_id`, `issuer_url`)을 `COGNITO_*` env 3개로 채우고, mock 서버가 `COGNITO_USER_POOL_ID`를 읽어 `/health` 응답에 그대로 반영하도록 수정(`mock-20260812-cognito-amd64` 태그로 재빌드/push, §7-1과 동일 절차). 커밋 push 후 ArgoCD가 153초 만에 sync, 새 파드/외부 ALB 양쪽에서 `"cognito_user_pool_id": "ap-northeast-2_s2ZnfGrqo"`(실제 User Pool ID와 일치)까지 확인.
+
+- **RDS/Valkey는 이번 라운드 범위에서 제외**했다 — `values-local.yaml`의 기존 주석대로 local 환경은 이 차트에서 RDS/Secrets Manager를 아예 안 띄우는 게 설계 의도이고(§13), IRSA→Secrets Manager 접근 메커니즘 자체는 2026-08-05에 임시 `irsa_test.tf`로 이미 별도 검증됐다(§3 참고) — RDS/Valkey를 다시 apply해서 중복 검증하는 대신, "값이 Deployment까지 실제로 도달하는가"라는 이번 시나리오의 목적엔 상시 유지 중인 Cognito가 더 적합한 대상이었음.
+- Cognito 값(User Pool ID/Client ID)은 민감정보가 아니라서(공개 클라이언트가 사용하는 값) K8s Secret이 아닌 일반 env로 충분했다 — RDS 접속 정보처럼 실제 시크릿이 필요한 값은 여기 패턴이 아니라 §3 2026-08-05 IRSA 검증에서 쓴 Secrets Manager 경로를 따라야 한다는 것도 이번에 다시 정리됨.
