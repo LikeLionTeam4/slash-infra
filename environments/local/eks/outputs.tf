@@ -26,10 +26,6 @@ output "karpenter_controller_role_arn" {
   value = module.eks.karpenter_controller_role_arn
 }
 
-output "ecr_repository_urls" {
-  value = module.eks.ecr_repository_urls
-}
-
 output "alb_controller_role_arn" {
   value = module.eks.alb_controller_role_arn
 }

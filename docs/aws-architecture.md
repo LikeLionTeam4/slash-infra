@@ -75,9 +75,10 @@ Slash 프로젝트 전체(웹 프론트엔드 제외 백엔드 서비스군)를 
 
 ## 6. 컨테이너 레지스트리
 
-`modules/eks`에 구현 완료.
+`modules/ecr`로 구현 완료, `environments/bootstrap`에서 apply(2026-08-12 이전 — 아래 참고).
 
 - 서비스별 ECR 리포지토리: `slash-api`, `slash-nlu`, `slash-llm`. `image_tag_mutability = IMMUTABLE` — 커밋 SHA 태그는 절대 안 바뀌니 덮어쓰기 자체를 막아둠.
+- **계정 전체가 공유하는 리소스라 `environments/bootstrap`이 소유한다(2026-08-12, `modules/eks`에서 이전).** local/dev/prod가 같은 이미지(`sha-` 태그)를 dev에서 검증 후 prod로 그대로 승격해가며 쓰는 구조(§9-3)라, 애초에 환경별 리소스가 아니다. 원래는 `modules/eks`(즉 `environments/local/eks`)가 만들고 있었는데, `environments/dev/eks`를 그대로 apply하면 같은 이름(`slash-api` 등)의 리포지토리를 또 만들려다 충돌했을 것 — state 버킷·Route53 zone과 같은 이유로 `bootstrap`으로 옮겨서 해소했다. 마이그레이션은 `terraform import`(bootstrap 쪽)+`terraform state rm`(local/eks 쪽)로 실제 AWS 리소스는 건드리지 않고 state 소유권만 이전, `terraform plan`으로 양쪽 다 "0 to destroy" 확인.
 - 수명주기 정책: 태그 없는 이미지는 7일 후, `sha-` 접두어 태그는 최근 10개만 남기고 자동 정리.
 - **`mock-` 접두어 태그는 예외**다(예: `mock-20260811`) — 실제 서비스 저장소에 Dockerfile/CI가 없던 시점에 클러스터 없이 ECR push 파이프라인만 먼저 검증하려고 만든 placeholder 이미지용(`slash-infra` 저장소 내 `mock-services/`). `sha-` 규칙(개수 기준)과 겹치지 않게 별도 규칙으로 push 후 3일 뒤 자동 정리한다 — 공유 계정에 방치되는 이미지가 안 남게 하기 위함. 각 서비스 저장소에 실제 Dockerfile/CI가 생기면 `mock-services/`와 이 규칙 둘 다 정리 대상.
 
@@ -173,11 +174,11 @@ Terraform 밖에서 별도로 작업할 필요는 없다 — AWS provider가 Clo
 
 ## 11. 환경 전략
 
-local/dev/prod 3단계로 나눈다. **계정 공유 여부는 환경마다 다르다** — §2의 "계정은 하나"는 한 사람이 local/dev/prod를 전부 적용할 때 얘기고, 실제로는 아래처럼 갈린다.
+local/dev/prod 3단계로 나눈다. **결정(2026-08-12): 팀 전체가 계정 하나(`727646470302`)의 인프라를 공유한다** — local도 예외가 아니다. §2의 "계정은 하나"가 곧 실제 운영 방식이고, 아래 표의 local 행도 이에 맞게 갱신했다(원래는 "local은 팀원마다 다른 계정"으로 설계했었으나, 실제로는 처음부터 전부 이 계정으로 진행돼왔음을 확인). [README §다른 AWS 계정에서 시작하기](../README.md#다른-aws-계정에서-시작하기-팀원용)는 이론상 다른 계정으로 시작하고 싶은 경우를 위해 남겨두지만, 팀의 기본 운영 방식은 아니다.
 
 | 환경 | 역할 | 스펙 | 계정 | 상태 |
 | --- | --- | --- | --- | --- |
-| **local** | 개인 맥북에서 `terraform apply`하는 실험용 — 모듈 변경을 실제 AWS에서 검증 | 최소 구성 (`environments/local/*` 그대로) | **팀원마다 다른 계정** (부트캠프 계정이 개인별 발급) — 서로 공유·의존 없이 각자 독립 적용. 자세한 건 [README §다른 AWS 계정에서 시작하기](../README.md#다른-aws-계정에서-시작하기-팀원용) | `network`/`frontend` 구축, RDS/EKS는 다음 단계 |
+| **local** | 개인 맥북에서 `terraform apply`하는 실험용 — 모듈 변경을 실제 AWS에서 검증 | 최소 구성 (`environments/local/*` 그대로) | **이 계정(`727646470302`)을 팀 전체가 공유**(2026-08-12 확정) — `slash-local` AWS CLI 프로필도 같은 계정을 가리킴. ECR처럼 계정 전체가 공유하는 자원은 `environments/bootstrap`으로 소유권을 모아 환경 간 충돌을 막는다(§6) | `network`/`frontend`/`eks`(검증용, apply→destroy 반복) 구축, RDS는 다음 단계 |
 | **dev** | prod와 거의 동일한 스펙을 유지하는 공유 테스트 서버 — 팀 전체가 QA에 사용 | prod와 동일 모듈, 동일 값(인스턴스 크기 등) | **이 계정(`727646470302`)으로 확정**(2026-08-11, [이슈 #13](https://github.com/LikeLionTeam4/slash-infra/issues/13)) — prod와 같은 계정을 공유, `Environment=dev` 태그와 리소스명 접미사(`-dev`)로만 구분 | 미구축 — 착수 대기 |
 | **prod** | 실제 운영 환경 | Multi-AZ, 가용성 우선 | **이 계정(`727646470302`)으로 확정.** `sbsh.cloud` 도메인 위임(가비아 NS)이 이미 이 계정의 Route53 zone을 가리키고 있어서, prod의 apex 도메인(§2)도 결국 이 계정에 있어야 한다 — 별도 prod 계정으로 나중에 재위임하지 않기로 함. 나머지 담당자는 이 계정에 IAM 사용자만 추가 | 미구축 |
 
@@ -203,13 +204,13 @@ local/dev/prod 3단계로 나눈다. **계정 공유 여부는 환경마다 다�
 다음 인터뷰 라운드에서 채워야 할 항목:
 
 - ~~dev 환경의 계정 구조~~ → prod와 같은 계정(`727646470302`)을 공유하는 것으로 확정(2026-08-11, §11, [이슈 #13](https://github.com/LikeLionTeam4/slash-infra/issues/13)). 다음 단계는 `environments/dev/` 착수
-- `slash_demo` DB를 실제로 어떻게 만들지 — SSM 포트포워딩으로 직접 접속할지, EKS 안의 일회성 Job으로 처리할지 (§7-1)
+- `slash_demo` DB를 실제로 어떻게 만들지 — **추천(2026-08-12): EKS 안의 일회성 Job.** SSM 포트포워딩용 별도 bastion EC2를 새로 세우는 것보다, 이미 만드는 EKS 노드가 private-app 서브넷에서 DB SG로 가는 경로를 이미 갖고 있어(§4-1) 추가 리소스·보안 표면 없이 `postgres` 클라이언트 이미지로 `CREATE DATABASE slash_demo;` 한 번 실행하고 지우면 된다. dev DB를 실제로 쓰기 시작하는 시점에 적용
 - Karpenter 실제 설치(Helm, NodePool/EC2NodeClass) — IRSA Role은 `eks` 모듈에 준비됐지만 한 번도 설치해본 적 없음(§5)
 - ~~ALB Ingress Controller 실제 설치~~ → IRSA Role apply + Helm 설치 + mock 이미지로 실제 ALB 응답까지 검증 완료(2026-08-11, §8). 도메인/ACM 연결과 상시 운영은 dev 환경 구축 후([이슈 #10](https://github.com/LikeLionTeam4/slash-infra/issues/10))
 - ~~ArgoCD 설치 및 GitOps 저장소 구조~~ → `helm/` 위치 결정 + local 클러스터에서 ArgoCD 설치·GitOps 자동 배포 왕복 검증까지 완료(2026-08-11, §9, [이슈 #10](https://github.com/LikeLionTeam4/slash-infra/issues/10)). dev 계정 구조가 정해지고 dev 환경이 실제로 구축되면 같은 `argocd/` manifest를 `values-dev.yaml` 기준으로 옮겨 상시 운영 전환
-- GPU 인스턴스 정확한 타입/개수, 예상 동시 요청 수 (Gemma 모델 크기에 따라 필요 VRAM이 달라짐)
+- GPU 인스턴스 정확한 타입/개수, 예상 동시 요청 수 — **추천(2026-08-12, [이슈 #12](https://github.com/LikeLionTeam4/slash-infra/issues/12)): `g4dn.xlarge`(T4, 16GB VRAM) 1대(min=0/max=1~2), Spot, Karpenter로 idle 시 0-scale.** dev는 QA용이라 상시 가용성이 필요 없다는 전제 — 다만 실제 Gemma 모델 크기(2B/7B/9B)에 따라 16GB로 부족할 수 있어 `slash-llm` 팀 확인 후 최종 확정
 - `slash-nlu`의 컴퓨트 요구사항 (CPU 규모, 메모리) — Kiwi 기반이라 GPU는 불필요할 것으로 추정하나 확정 필요
-- prod 환경의 네임스페이스 분리 vs 클러스터 분리 (§11)
+- prod 환경의 네임스페이스 분리 vs 클러스터 분리 (§11) — **추천(2026-08-12): 클러스터 분리.** VPC·RDS·Cognito는 이미 dev/prod를 완전히 분리하기로 했는데 EKS 컨트롤플레인만 공유하면 일관성이 깨지고, dev의 실수(예: 2026-08-12에 겪은 orphan ALB류)가 prod 워크로드에 물리적으로 영향을 못 주게 격리하는 게 안전하다. 클러스터당 월 ~$75 추가 비용은 있지만 이미 dev용 클러스터를 별도로 두기로 한 시점에서 증분은 크지 않음
 - ~~Helm chart를 slash-infra 내부에 둘지, 별도 저장소로 분리할지~~ → **결정: `slash-infra` 내부(`helm/`)로 확정**(2026-08-11). Terraform이 만드는 IRSA Role ARN 등과 값이 맞물려 있어 같은 저장소/같은 PR로 바꾸는 게 안전하고, 지금 규모(단일 담당자, 남은 기간 짧음)에서 저장소를 나누는 비용이 더 크다고 판단. CI가 이미지 태그를 자주 커밋하기 시작해 git log가 지저분해지면 그때 분리 재검토
 - CloudTrail 로그 보관 기간(지금은 90일 잠정 기본값), CloudWatch 알람의 실제 임계값(지금은 CPU 80%/스토리지 2GB 잠정값) — 트래픽 실측 후 조정
 - ALB Ingress·GPU 노드그룹이 생기면 그 알람(5xx 비율, GPU 사용률)을 `modules/observability`에 추가

@@ -24,3 +24,8 @@ output "cloudtrail_bucket_name" {
 output "cloudtrail_arn" {
   value = aws_cloudtrail.main.arn
 }
+
+output "ecr_repository_urls" {
+  description = "local/dev/prod가 공용으로 참조하는 ECR 리포지토리 URL (2026-08-12, modules/eks에서 이전)"
+  value       = module.ecr.repository_urls
+}
