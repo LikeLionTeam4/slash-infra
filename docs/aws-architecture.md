@@ -149,6 +149,15 @@ Slash 프로젝트 전체(웹 프론트엔드 제외 백엔드 서비스군)를 
 - **현재 타겟 브랜치는 `dev`, 원래 의도는 `main`이었다.** `slash-web`의 `main`은 아직 `README.md`뿐인 빈 스텁 브랜치라(첫 시도 때 `npm ci`가 빌드할 앱 자체가 없어서 실패) 실제 개발이 이뤄지는 `dev`를 임시로 타겟팅했다. 팀이 `dev`→`main` 첫 정식 릴리스를 하면 `modules/frontend-cicd` 호출부(`environments/local/frontend`)의 `github_branch`와 `slash-web`의 워크플로 트리거를 `main`으로 되돌려야 한다(코드에 TODO로 남겨둠).
 - 워크플로 파일은 `slash-web` 저장소에 있다(`slash-infra`가 아님) — `.github/workflows/deploy-local.yml`.
 
+### 9-3. dev/prod 배포 트리거 및 브랜치 전략
+
+**결정(2026-08-12, [이슈 #17](https://github.com/LikeLionTeam4/slash-infra/issues/17)):** dev는 `dev` 브랜치 push마다 자동 배포(승인 없음), prod는 `main` push/merge 트리거 + GitHub Environment(`production`) 필수 리뷰어로 배포 전 승인 게이트를 둔다. §9-2의 프론트엔드 CI/CD가 이미 갖고 있던 "dev→main 첫 릴리스하면 main으로 되돌릴 것" TODO와 같은 방향이라 백엔드도 동일 패턴을 따른다.
+
+- `slash-api`/`slash-nlu`/`slash-llm` 세 저장소의 `main` 브랜치에 `required_linear_history`(선형 히스토리 강제, `allow_force_pushes`/`allow_deletions`도 함께 비활성) 브랜치 보호 규칙 적용 완료(2026-08-12, GitHub 저장소 설정 — Terraform 관리 대상 아님). 목적: `dev`에서 이미 검증된 이미지(`sha-` 커밋 태그, IMMUTABLE, §6)를 머지 커밋으로 SHA를 바꾸지 않고 그대로 prod로 승격하기 위함 — PR 머지는 Squash/Rebase만 가능해짐(일반 Merge commit 방식 차단).
+- `production` Environment(필수 리뷰어)는 저장소 설정에서 생성하는 것으로, 실제 배포 워크플로 자체는 [이슈 #11](https://github.com/LikeLionTeam4/slash-infra/issues/11)(각 서비스 실제 Dockerfile 대기)이 풀려야 착수 가능 — 지금은 자리만 마련해둔 상태.
+- 지금은 세 저장소 다 `main`이 `dev`보다 9~35개 커밋 뒤처진 사실상 미사용 브랜치라 이 변경이 팀 작업에 즉시 영향을 주진 않는다. 첫 `dev→main` 릴리스 시점에 팀 공지가 필요 — [이슈 #18](https://github.com/LikeLionTeam4/slash-infra/issues/18)에서 추적.
+- `environments/dev/frontend`(→ `dev.sbsh.cloud`) 착수는 보류 — 백엔드 dev가 실제로 QA 가능해지고 프론트가 dev API를 호출할 필요가 생기는 시점에 팀 합의 후 진행(§9-2의 `local/frontend`와는 별개).
+
 ## 10. 옵저버빌리티 (CloudWatch / CloudTrail)
 
 Terraform 밖에서 별도로 작업할 필요는 없다 — AWS provider가 CloudWatch/CloudTrail 리소스를 그대로 지원하므로 다른 모듈과 동일하게 관리한다. **CloudTrail은 `environments/bootstrap`, CloudWatch 알람은 `modules/observability`(환경별)로 구현 완료** — 둘의 위치가 다른 이유는 아래 참고.
