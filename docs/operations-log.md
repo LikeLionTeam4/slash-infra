@@ -28,12 +28,13 @@ Apply는 이 표의 순서대로, **Destroy는 반대 순서**로 진행한다. 
 
 | 환경 | 리소스 수 | 핵심 output | 상태 |
 | --- | --- | --- | --- |
-| `environments/bootstrap` | 5 | `route53_zone_id = Z03858108FMADVU36PUA`, `bucket_name = slash-tfstate-727646470302` | 적용됨 |
+| `environments/bootstrap` | 11 | `route53_zone_id = Z03858108FMADVU36PUA`, `bucket_name = slash-tfstate-727646470302`, `ecr_repository_urls = {slash-api, slash-nlu, slash-llm}` | 적용됨. ECR 3+lifecycle policy 3을 `local/eks`에서 이전(2026-08-12, §6) |
 | `environments/local/network` | 38 | `vpc_id = vpc-0e99fcc8dcea839a0`, NAT 1개(`ap-northeast-2a`) | 적용됨 |
 | `environments/local/frontend` | 12 | `site_url = https://local.sbsh.cloud`, `bucket_name = slash-web-local-727646470302`, `frontend_deploy_role_arn = arn:aws:iam::727646470302:role/slash-frontend-deploy-local` | 적용됨, 콘텐츠까지 배포됨. GitHub OIDC 배포 Role(`modules/frontend-cicd`) 추가 적용(2026-08-05) |
 | `environments/local/cognito` | 3 | `user_pool_id = ap-northeast-2_s2ZnfGrqo`, `user_pool_client_id = 4g9h0vsvel02drlieqbg9n9nhi`, `issuer_url = https://cognito-idp.ap-northeast-2.amazonaws.com/ap-northeast-2_s2ZnfGrqo`, `hosted_domain = https://slash-local-727646470302.auth.ap-northeast-2.amazoncognito.com` | 적용됨, 상시 유지. Managed Login(v2) + 이메일·비밀번호. slash-web/slash-api가 이 값들을 직접 참조하므로 destroy 금지 |
-| `environments/local/eks` (ECR만) | 6 | `ecr_repository_urls = {slash-api, slash-nlu, slash-llm}` (계정 `727646470302`) | **ECR만 적용된 상태로 유지(2026-08-12)** — 클러스터+노드그룹+ALB Controller Role은 네 번째(로컬 배포 시나리오 5종, §7) apply→destroy까지 정상 정리됨. `terraform plan`으로 "16 to add, 0 to destroy"까지 확인 |
-| `environments/dev/*` | – | – | 미구축 |
+| `environments/local/eks` | 0 | – | **미적용(2026-08-12)** — ECR도 bootstrap으로 이전돼서 이제 아무것도 안 남음. 클러스터 재현 이력은 §3/§7 참고 |
+| `environments/dev/network` | 40 | `vpc_id = vpc-04a4c5ea06df4523b` (10.1.0.0/16), NAT 2개(AZ당 1개) | **적용됨(2026-08-12)** — dev 착수 1단계, backend "s3"로 처음부터 시작(bucket `slash-tfstate-727646470302`, key `dev/network.tfstate`) |
+| `environments/dev/{cognito,database,eks,observability}` | – | – | 미구축 — 순서대로 착수 예정 |
 | `environments/prod/*` | – | – | 미구축 |
 
 계정은 `727646470302`(부트캠프 공유), 리전 `ap-northeast-2`. 이 표는 스냅샷이라 실제 값이 궁금하면 각 디렉터리에서 `terraform output`으로 재확인할 것 — 아래는 마지막 갱신 시점(2026-08-05) 기준.
@@ -92,6 +93,7 @@ Apply는 이 표의 순서대로, **Destroy는 반대 순서**로 진행한다. 
 | 2026-08-12 | §7 로컬 배포 시나리오 5종 검증 종료 후 `local/eks` destroy(ECR 제외) | `kubectl delete ingress slash-api` → **ArgoCD selfHeal이 즉시 재생성**(§4 참고, 예상 못 한 부수효과) → `helm uninstall argocd`/`aws-load-balancer-controller` → `terraform destroy -target`으로 16개 정리 → orphan ALB 1개 + 연관 target group·보안그룹 2개를 AWS CLI로 수동 정리(§4) → `terraform plan`으로 "16 to add, 0 to destroy" 재확인, 다른 팀 리소스와 섞이지 않는 것까지 전체 스윕으로 확인 | ECR 6개만 남기고 정상 정리 완료 |
 | 2026-08-12 | `slash-api`/`slash-nlu`/`slash-llm` GitHub 저장소 설정 (§9-3, [이슈 #17](https://github.com/LikeLionTeam4/slash-infra/issues/17)) | 세 저장소 `main` 브랜치에 `required_linear_history=true`(+`allow_force_pushes`/`allow_deletions` 비활성) 브랜치 보호 규칙 적용 — `gh api --method PUT .../branches/main/protection`. `production` Environment 생성은 API 호출이 자동 모드 분류기에 두 번 차단되어 사용자가 웹 UI로 직접 진행, `infra-team-4` 팀을 필수 리뷰어로 지정 완료(개인이 아닌 팀 전체라 한 사람 부재 시에도 승인 가능) — 3개 저장소 전부 API로 재확인함 | Terraform 관리 대상이 아닌 GitHub 저장소 설정이라 이 문서(§9-3)와 이슈로만 추적. 세 저장소 다 `main`이 `dev`보다 9~35개 커밋 뒤처진 미사용 브랜치라 팀 작업에 즉시 영향 없음 확인 후 적용 |
 | 2026-08-12 | ECR을 `local/eks`에서 `bootstrap`으로 이전(§6, dev 착수 전 정리) | `modules/ecr`(신규) 작성 → `environments/bootstrap`에서 `terraform import`로 기존 6개 리소스(리포지토리 3 + lifecycle policy 3) 흡수 → `terraform apply -target=module.ecr`로 태그만 갱신(`Environment: local→shared`, `Service: eks→ecr`) → `local/eks`에서 `terraform state rm`으로 6개 제거, `modules/eks/ecr.tf` 삭제 → 양쪽 `terraform plan`으로 "0 to destroy" 확인(local/eks는 클러스터 재apply분 16개만 남음, ECR 관련 변경 없음), `terraform validate` 통과 | 실제 AWS 리소스는 한 번도 안 건드림(`state rm`/`import`만 사용) — `dev/eks`를 새로 만들 때 같은 이름의 ECR을 또 만들려다 충돌하는 걸 미리 막기 위한 작업. 계정 공유 결정(§11)도 이 김에 문서에 반영 — local도 처음부터 팀 전체가 계정 하나(`727646470302`)를 공유해온 것으로 확인, 문서상 "팀원마다 다른 계정" 문구를 정정 |
+| 2026-08-12 | `dev/network` (§8 dev 착수 1단계) | VPC(10.1.0.0/16) 등 40개 apply — `modules/network` 재사용, `nat_gateway_per_az` 오버라이드 없이 모듈 기본값(AZ당 1개, local만 예외로 1개로 깎아둔 것) 그대로 사용해 NAT 2개 생성. **처음부터 `backend "s3"`**(`slash-tfstate-727646470302`, key `dev/network.tfstate`, `use_lockfile=true`)로 시작 — local처럼 나중에 옮기지 않음 | `aws ec2 describe-vpcs`/`describe-nat-gateways`로 CIDR·NAT 2개 `available` 상태 확인. §5 destroy 순서상 database/eks가 여기 서브넷을 참조하므로 dev 착수 기간 내내 destroy하지 않고 유지(local의 network과 동일한 취급) |
 
 ### 보안그룹 description의 ASCII 제약 (2026-08-04)
 
@@ -395,3 +397,20 @@ git 커밋 없이 `kubectl scale deploy slash-api --replicas=4`로 클러스터�
 
 - **RDS/Valkey는 이번 라운드 범위에서 제외**했다 — `values-local.yaml`의 기존 주석대로 local 환경은 이 차트에서 RDS/Secrets Manager를 아예 안 띄우는 게 설계 의도이고(§13), IRSA→Secrets Manager 접근 메커니즘 자체는 2026-08-05에 임시 `irsa_test.tf`로 이미 별도 검증됐다(§3 참고) — RDS/Valkey를 다시 apply해서 중복 검증하는 대신, "값이 Deployment까지 실제로 도달하는가"라는 이번 시나리오의 목적엔 상시 유지 중인 Cognito가 더 적합한 대상이었음.
 - Cognito 값(User Pool ID/Client ID)은 민감정보가 아니라서(공개 클라이언트가 사용하는 값) K8s Secret이 아닌 일반 env로 충분했다 — RDS 접속 정보처럼 실제 시크릿이 필요한 값은 여기 패턴이 아니라 §3 2026-08-05 IRSA 검증에서 쓴 Secrets Manager 경로를 따라야 한다는 것도 이번에 다시 정리됨.
+
+## 8. dev 환경 구축 (2026-08-12~)
+
+local에서 검증된 모듈을 dev 스펙 값으로 재사용해 `environments/dev/*`를 순서대로 만든다. **destroy는 전 구간을 다 확인한 뒤 마지막에 한 번에** — network/eks/database처럼 뒤 단계가 앞 단계 output(서브넷 ID 등)을 참조하는 의존관계가 있어서, 매 단계마다 지웠다 다시 올리는 건 비효율적이라는 판단(local도 `network`/`cognito`는 애초에 destroy 안 하고 상시 유지하는 것과 같은 이유).
+
+| # | 작업 | 상태 |
+| --- | --- | --- |
+| 1 | `dev/network` — VPC/서브넷, NAT AZ당 1개, `backend "s3"` | ✅ 완료(2026-08-12) — 위 §3 참고 |
+| 2 | `dev/cognito` — 별도 User Pool | ⬜ 진행 예정 |
+| 3 | `dev/database` — RDS Multi-AZ + Valkey | ⬜ 진행 예정 |
+| 4 | `dev/eks` — EKS 클러스터 + 노드그룹 (ECR은 bootstrap 참조) | ⬜ 진행 예정 |
+| 5 | `dev/observability` — CloudWatch 알람 + SNS | ⬜ 진행 예정 |
+| 6 | ArgoCD + dev Application 매니페스트 + ALB Controller + `api.dev.sbsh.cloud` 도메인 | ⬜ 진행 예정 |
+| 7 | 백엔드 CI용 IAM OIDC Role(ECR push, 3개 서비스) | ⬜ 진행 예정 |
+
+- local Cognito(`slash-users-local`)와 dev Cognito는 **완전히 별도 User Pool** — network/database/eks와 같은 원칙(환경별 리소스), ECR처럼 AWS 제약으로 강제 공유해야 하는 경우가 아님. 백엔드가 지금 local 값으로 작업 중인 것과는 무관 — `values-dev.yaml`에 dev Pool 값만 새로 채우면 됨, local 쪽엔 영향 없음.
+- 전 구간 apply가 끝나면 §5와 같은 순서(뒤 단계부터)로 한 번에 destroy하고 이 표 상태를 최종 갱신한다.
