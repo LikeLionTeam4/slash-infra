@@ -36,7 +36,8 @@ Apply는 이 표의 순서대로, **Destroy는 반대 순서**로 진행한다. 
 | `environments/dev/network` | 40 | `vpc_id = vpc-087f35750782dd158` (10.8.0.0/16), NAT 2개(AZ당 1개) | **적용됨(2026-08-12)** — dev 착수 1단계, backend "s3"로 처음부터 시작(bucket `slash-tfstate-727646470302`, key `dev/network.tfstate`). CIDR을 10.1.0.0/16→10.8.0.0/16으로 destroy 후 재apply(아래 §3 참고) |
 | `environments/dev/cognito` | 3 | `user_pool_id = ap-northeast-2_90fRvDZrD`, `hosted_domain = https://slash-dev-727646470302.auth.ap-northeast-2.amazoncognito.com` | **적용됨(2026-08-12)** — dev 착수 2단계, local과 완전히 별도 User Pool. `callback_urls`/`logout_urls`에 아직 안 뜬 `dev.sbsh.cloud`도 미리 등록해둠(무해, 나중에 재apply 불필요) |
 | `environments/dev/database` | 7 | `rds_endpoint = slash-rds-dev.cnqmcq6uwqa3.ap-northeast-2.rds.amazonaws.com:5432`, `valkey_endpoint = master.slash-valkey-dev.q2tpkl.apn2.cache.amazonaws.com` | **적용됨(2026-08-12)** — dev 착수 3단계, `db.t4g.small` **Multi-AZ 활성**(local과 다름) + `cache.t4g.micro` Valkey. `deletion_protection=false`/`skip_final_snapshot=true`로 임시 오버라이드(이번 apply→검증→destroy 사이클용, 상시 운영 전환 시 되돌려야 함) |
-| `environments/dev/{eks,observability}` | – | – | 미구축 — 순서대로 착수 예정 |
+| `environments/dev/eks` | 16 | `cluster_name = slash-eks-dev`, `cluster_endpoint = https://DAA7845DC1F3BDE5DEEB0BB28AAEBEF8.gr7.ap-northeast-2.eks.amazonaws.com` | **적용됨(2026-08-12)** — dev 착수 4단계, ECR은 이제 `modules/eks`에 없어서(§6) local과 이름 충돌 없이 apply. 3개 노드 전부 `Ready`(10.8.x.x, amd64) |
+| `environments/dev/observability` | – | – | 미구축 — 다음 단계 |
 | `environments/prod/*` | – | – | 미구축 |
 
 계정은 `727646470302`(부트캠프 공유), 리전 `ap-northeast-2`. 이 표는 스냅샷이라 실제 값이 궁금하면 각 디렉터리에서 `terraform output`으로 재확인할 것 — 아래는 마지막 갱신 시점(2026-08-05) 기준.
@@ -99,6 +100,7 @@ Apply는 이 표의 순서대로, **Destroy는 반대 순서**로 진행한다. 
 | 2026-08-12 | `dev/network` CIDR 변경(10.1.0.0/16 → 10.8.0.0/16) 후 재apply | 환경별로 간격을 둔 CIDR 체계로 정리(local=10.0.0.0/16, dev=10.8.0.0/16, prod=10.16.0.0/16 예정) — VPC CIDR은 생성 후 못 바꿔서(`ForceNew`) destroy 후 재apply. destroy 중 `slash-vpc-flow-logs-dev-727646470302` 버킷만 버저닝 때문에 1차 실패(§4 "versioning 켜진 S3 버킷" 항목과 동일 패턴) → 그 버킷 안의 객체 버전 7개(전부 방금 그 VPC가 만든 flow log, 다른 리소스와 무관 확인 후) 수동 삭제 → 재destroy로 완료 → 새 CIDR로 재apply, `aws ec2 describe-vpcs`로 `10.8.0.0/16` 확인 | dev-architecture.drawio의 CIDR 표기도 같이 갱신(10.1→10.8). §5 destroy 순서상 database/eks가 여기 서브넷을 참조하므로 dev 착수 기간 내내 destroy하지 않고 유지(local의 network과 동일한 취급) |
 | 2026-08-12 | `dev/cognito` (§8 dev 착수 2단계) | `modules/cognito` 재사용, User Pool `slash-users-dev` 등 3개 apply. local Cognito와 완전히 별도 리소스(같은 계정을 공유해도 Cognito는 ECR과 달리 이름 충돌 제약이 없어 환경별로 만드는 게 자연스러움) | `aws cognito-idp describe-user-pool`로 `slash-users-dev` 생성 확인. local Cognito는 이번 작업과 무관하게 그대로 유지(사용자 요청 — "정리하자고 하기 전까지 정리 안 하면 됨") |
 | 2026-08-12 | `dev/database` (§8 dev 착수 3단계) | `modules/database` 재사용, RDS(Multi-AZ) + Valkey + Secrets Manager 시크릿 2개 등 7개 apply. `dev/network` 서브넷/보안그룹은 `terraform.tfvars` 수동 복사 대신 `terraform_remote_state`로 직접 참조(dev부터는 S3 backend라 가능 — local의 수동 tfvars 방식과 다름). `rds_deletion_protection=false`/`rds_skip_final_snapshot=true`로 임시 오버라이드 — 이번 apply→검증→destroy 사이클 편의용, `rds_multi_az`는 오버라이드 없이 모듈 기본값(true) 사용. RDS 생성에 12분 51초 소요(Multi-AZ라 local의 단일 AZ보다 오래 걸림) | `aws rds describe-db-instances`로 `MultiAZ: true`/`available`, `aws elasticache describe-replication-groups`로 Valkey `available` 확인 |
+| 2026-08-12 | `dev/eks` (§8 dev 착수 4단계) | `modules/eks` 재사용, `dev/network` 참조도 `terraform_remote_state`로. ECR은 이제 이 모듈에 없어서(2026-08-12 이전, §6) local과 이름 충돌 없이 16개 1차 시도부터 정상 apply(1분 49초) | `aws eks update-kubeconfig` 후 `kubectl get nodes`로 3개 노드 전부 `Ready`, `10.8.x.x`(dev VPC) amd64 확인 |
 
 ### 보안그룹 description의 ASCII 제약 (2026-08-04)
 
@@ -412,7 +414,7 @@ local에서 검증된 모듈을 dev 스펙 값으로 재사용해 `environments/
 | 1 | `dev/network` — VPC/서브넷, NAT AZ당 1개, `backend "s3"` | ✅ 완료(2026-08-12) — 위 §3 참고 |
 | 2 | `dev/cognito` — 별도 User Pool | ✅ 완료(2026-08-12) |
 | 3 | `dev/database` — RDS Multi-AZ + Valkey | ✅ 완료(2026-08-12) |
-| 4 | `dev/eks` — EKS 클러스터 + 노드그룹 (ECR은 bootstrap 참조) | ⬜ 진행 예정 |
+| 4 | `dev/eks` — EKS 클러스터 + 노드그룹 (ECR은 bootstrap 참조) | ✅ 완료(2026-08-12) |
 | 5 | `dev/observability` — CloudWatch 알람 + SNS | ⬜ 진행 예정 |
 | 6 | ArgoCD + dev Application 매니페스트 + ALB Controller + `api.dev.sbsh.cloud` 도메인 | ⬜ 진행 예정 |
 | 7 | 백엔드 CI용 IAM OIDC Role(ECR push, 3개 서비스) | ⬜ 진행 예정 |
