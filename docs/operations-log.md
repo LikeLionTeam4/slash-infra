@@ -426,3 +426,34 @@ local에서 검증된 모듈을 dev 스펙 값으로 재사용해 `environments/
 
 - local Cognito(`slash-users-local`)와 dev Cognito는 **완전히 별도 User Pool** — network/database/eks와 같은 원칙(환경별 리소스), ECR처럼 AWS 제약으로 강제 공유해야 하는 경우가 아님. 백엔드가 지금 local 값으로 작업 중인 것과는 무관 — `values-dev.yaml`에 dev Pool 값만 새로 채우면 됨, local 쪽엔 영향 없음.
 - 전 구간 apply가 끝나면 §5와 같은 순서(뒤 단계부터)로 한 번에 destroy하고 이 표 상태를 최종 갱신한다.
+
+§9의 확장성 갭 점검 후 추가로 진행한 항목:
+
+| # | 작업 | 상태 |
+| --- | --- | --- |
+| 8 | Karpenter 설치 + NodePool/EC2NodeClass (dev) | ✅ 완료(2026-08-12) — §8-1 |
+| 9 | metrics-server + HPA (dev) | ⬜ 진행 예정 |
+| 10 | AWS Budgets (계정 전체, bootstrap) | ⬜ 진행 예정 |
+
+### 8-1. Karpenter 설치 및 스케일 검증 (완료, 2026-08-12)
+
+IRSA Role(`slash-karpenter-controller-dev`)은 이미 4단계(`dev/eks`)에서 같이 만들어져 있었음 — Helm 설치와 NodePool/EC2NodeClass만 남아있던 상태.
+
+- 기본/최신 안정 버전(1.1.1)으로 첫 설치 시도 → `panic: karpenter version is not compatible with K8s version 1.36`으로 파드가 `CrashLoopBackOff`. `docker manifest inspect`로 태그를 순차 탐색해 `1.10.0`이 존재하는 걸 확인 → 재설치 성공(2/2 Running)
+- NodePool 최초 적용 시 `EC2NodeClass`가 `InstanceProfileReady=Unknown`에서 멈춤 → 컨트롤러 로그 확인 결과 `iam:CreateInstanceProfile`/`iam:GetInstanceProfile` 등 권한 부족(`AccessDenied`) — `EC2NodeClass.spec.role`을 쓰면 Karpenter가 인스턴스 프로필을 직접 만들고 관리하는데, 기존 IRSA 정책엔 `iam:PassRole`만 있고 프로필 관리 권한이 없었음. `modules/eks/karpenter.tf`에 `InstanceProfileManagement` 문 추가(`CreateInstanceProfile`/`TagInstanceProfile`/`AddRoleToInstanceProfile`/`RemoveRoleFromInstanceProfile`/`DeleteInstanceProfile`/`GetInstanceProfile`/`ListInstanceProfiles`, AWS 공식 Karpenter 문서와 동일하게 리소스 `*`) → `dev/eks`에 재apply(1개 정책 변경) → 94초 뒤 `EC2NodeClass Ready=True`
+- NodePool에 `karpenter.k8s.aws/instance-generation Gt 2` 요구조건을 넣었더니 `operator: Gte`(작성한 적 없는 값)로 검증 에러 — 이 Karpenter 버전의 스키마 호환성 문제로 추정, 필수 조건이 아니라 제거하고 진행
+- **실제 스케일 검증**: cpu 1500m × 4 replica 테스트 파드 배포 → 기존 3개 노드에 못 들어가는 2개가 Pending → **24초 만에 새 노드(t계열) 프로비저닝**, 전부 `Running` 확인. 테스트 워크로드 삭제 → **145초 뒤 그 노드가 자동으로 정리**(consolidation, `consolidateAfter: 1m`)됨을 확인
+- 매니페스트는 `karpenter/dev/nodepool.yaml`(신규, `argocd/`와 같은 성격 — GitOps 대상 아닌 K8s 리소스라 커밋만 하고 `kubectl apply`로 직접 관리) + `karpenter/README.md`에 설치 절차·버전 호환성 주의사항 정리
+
+## 9. 확장성 점검 (2026-08-12)
+
+dev 구축이 끝난 뒤 "이 구조가 실제 트래픽 증가에도 버티는가"를 점검했다.
+
+- **환경을 늘리는 확장성은 확보됨**: 모듈 재사용(network/database/eks/cognito/backend-cicd), bootstrap의 계정 공용 자원 정리(ECR/CI Role), CIDR 간격 체계(local=10.0.0.0/16, dev=10.8.0.0/16, prod=10.16.0.0/16 예정) — dev 착수 자체가 이 패턴이 실제로 동작함을 증명.
+- **부하 증가에 버티는 확장성은 설계만 있고 구현은 없었음** — 점검에서 나온 5개 갭:
+  1. Karpenter 미설치 → **해소**(§8-1)
+  2. HPA 없음(replicaCount 고정값) → 진행 예정(§8 표 9번)
+  3. GPU 노드그룹 완전 미정(이슈 #12) — `slash-llm` 팀 확인 필요, 우리가 단독으로 못 풂
+  4. RDS read replica / Valkey 스케일아웃 없음 — **의도적으로 보류**: dev엔 read replica 효과를 검증할 실제 읽기 부하가 없어서, 지금 만들면 비용만 나가고 검증 가치가 없음. 실사용자 트래픽 생기면 재검토
+  5. AWS Budgets(계정 전체 비용 알림) 없음 → 진행 예정(§8 표 10번, `environments/bootstrap` 소유)
+- `slash-api`의 HikariCP 커넥션 풀 설정에 "최대 replica × 풀 크기가 RDS `max_connections`의 70%를 넘지 않게 관리"라는 comment가 이미 있음 — 스케일링을 아예 고려 안 한 설계는 아니었다는 신호.

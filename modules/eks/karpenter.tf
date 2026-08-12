@@ -71,6 +71,23 @@ data "aws_iam_policy_document" "karpenter_controller" {
     resources = [aws_iam_role.node.arn]
   }
 
+  # EC2NodeClass.spec.role를 쓰면(범용 노드그룹과 같은 Role 재사용, node_group.tf 참고)
+  # Karpenter가 그 Role을 감싸는 인스턴스 프로필을 직접 만들고 관리한다 — 리소스 스코핑이
+  # 불가능한 액션들이라(생성 전엔 ARN을 모름) AWS 공식 Karpenter 문서 예시와 동일하게 "*"를 쓴다.
+  statement {
+    sid = "InstanceProfileManagement"
+    actions = [
+      "iam:CreateInstanceProfile",
+      "iam:TagInstanceProfile",
+      "iam:AddRoleToInstanceProfile",
+      "iam:RemoveRoleFromInstanceProfile",
+      "iam:DeleteInstanceProfile",
+      "iam:GetInstanceProfile",
+      "iam:ListInstanceProfiles",
+    ]
+    resources = ["*"]
+  }
+
   statement {
     sid       = "EKSClusterRead"
     actions   = ["eks:DescribeCluster"]

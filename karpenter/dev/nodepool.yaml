@@ -1,0 +1,55 @@
+# subnetSelectorTerms/securityGroupSelectorTerms는 environments/dev/network output(2026-08-12
+# apply 시점 값)을 그대로 옮겨 적었다 — 네트워크를 재apply해서 값이 바뀌면 여기도 같이 갱신할 것.
+# role은 범용 노드그룹과 동일한 IAM Role을 재사용한다(modules/eks/node_group.tf,
+# docs/aws-architecture.md §5) — Karpenter가 이 Role을 감싸는 인스턴스 프로필을 직접
+# 생성/관리한다(modules/eks/karpenter.tf의 InstanceProfileManagement 권한 필요).
+apiVersion: karpenter.k8s.aws/v1
+kind: EC2NodeClass
+metadata:
+  name: default
+spec:
+  amiFamily: AL2023
+  amiSelectorTerms:
+    - alias: al2023@latest
+  role: slash-eks-node-dev
+  subnetSelectorTerms:
+    - id: subnet-024b340160b278a29 # ap-northeast-2a private-app
+    - id: subnet-08e0afda6b2b5723b # ap-northeast-2c private-app
+  securityGroupSelectorTerms:
+    - id: sg-09b8ff6f748976952 # dev EKS 보안그룹
+  tags:
+    Project: slash
+    Service: eks
+    Environment: dev
+    ManagedBy: karpenter
+---
+# instance-generation 같은 추가 제약을 넣었더니 이 Karpenter 버전(1.10.0)에서
+# "operator: Gte"라는, 우리가 쓰지도 않은 값으로 검증 에러가 나서(버전 호환성 이슈로 추정)
+# 뺐다 — docs/operations-log.md 참고. 필요한 조건만 최소로 유지.
+apiVersion: karpenter.sh/v1
+kind: NodePool
+metadata:
+  name: default
+spec:
+  template:
+    spec:
+      nodeClassRef:
+        group: karpenter.k8s.aws
+        kind: EC2NodeClass
+        name: default
+      requirements:
+        - key: kubernetes.io/arch
+          operator: In
+          values: ["amd64"]
+        - key: karpenter.sh/capacity-type
+          operator: In
+          values: ["on-demand"]
+        - key: karpenter.k8s.aws/instance-category
+          operator: In
+          values: ["t"]
+  limits:
+    cpu: "8"
+    memory: 16Gi
+  disruption:
+    consolidationPolicy: WhenEmptyOrUnderutilized
+    consolidateAfter: 1m
