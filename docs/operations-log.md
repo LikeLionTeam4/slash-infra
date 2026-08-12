@@ -14,7 +14,7 @@ Apply는 이 표의 순서대로, **Destroy는 반대 순서**로 진행한다. 
 | 2 | `environments/local/network` | ✅ 적용됨 | 없음 — 1번과 순서 무관, 독립적 | 4·5번(database/eks)**보다 나중에** 지워야 함(§5-3, §5-4) |
 | 3 | `environments/local/frontend` (+ `modules/frontend-cicd` 배포 Role) | ✅ 적용됨 | 1번의 `hosted_zone_id` 필요 | **가장 먼저.** zone 안에 이 모듈이 만든 레코드가 있어서(§5-1) — `force_destroy=true`라 버킷 비우기는 불필요. CI Role은 이 환경 destroy 시 같이 지워짐(별도 조치 불필요) |
 | 4 | RDS + Valkey + Secrets Manager | ✅ 코드 완료, **apply→검증→destroy 완료(현재는 미적용)** | 2번의 `private_db_subnet_ids`, `db_security_group_id` 필요 | 2번(network)**보다 먼저** 지워야 함(서브넷/SG 참조). local은 `deletion_protection=false`+`skip_final_snapshot=true`라 바로 destroy 가능 |
-| 5 | EKS + EC2(3대) + ECR + ALB Controller Role | 클러스터/노드그룹/ALB Controller Role은 ✅ 코드 완료, **세 번째 apply→검증(이번엔 ArgoCD+GitOps, §3)→destroy까지 완료**(2026-08-11, ALB Controller+Helm chart 검증은 두 번째 apply 때 완료). **ECR만 계속 적용된 상태로 유지 중** | 2번의 `private_app_subnet_ids`, `eks_security_group_id` 필요. 4번과는 서로 독립적. ECR은 이 둘과 무관 — 클러스터 없이도 apply 가능 | 2번(network)**보다 먼저** 지워야 함(서브넷/SG를 참조 중). ECR도 `force_delete` 안 켜놔서 이미지 있으면 비우거나 옵션 추가 필요(§4 flow_logs 버킷과 같은 패턴) — 단 `mock-*` 태그는 lifecycle policy가 3일 후 자동 정리하므로 그 이미지들 때문에 막힐 일은 없음. **ALB Controller로 Ingress를 만든 적이 있다면 클러스터 destroy 전에 반드시 `kubectl delete ingress`부터 해야 함**(§4 참고, 단 이번 ArgoCD 검증 라운드는 ALB Controller를 재설치하지 않아서 해당 없었음) |
+| 5 | EKS + EC2(3대) + ECR + ALB Controller Role | 클러스터/노드그룹/ALB Controller Role은 ✅ 코드 완료, **네 번째 apply 진행 중**(2026-08-12, 로컬 배포 시나리오 5종 검증용, §3·§7). 세 번째 apply→검증(ArgoCD+GitOps)→destroy는 2026-08-11에 완료. **ECR은 그 사이 계속 적용된 상태로 유지 중** | 2번의 `private_app_subnet_ids`, `eks_security_group_id` 필요. 4번과는 서로 독립적. ECR은 이 둘과 무관 — 클러스터 없이도 apply 가능 | 2번(network)**보다 먼저** 지워야 함(서브넷/SG를 참조 중). ECR도 `force_delete` 안 켜놔서 이미지 있으면 비우거나 옵션 추가 필요(§4 flow_logs 버킷과 같은 패턴) — 단 `mock-*` 태그는 lifecycle policy가 3일 후 자동 정리하므로 그 이미지들 때문에 막힐 일은 없음. **ALB Controller로 Ingress를 만든 적이 있다면 클러스터 destroy 전에 반드시 `kubectl delete ingress`부터 해야 함**(§4 참고) |
 | 6 | ALB Ingress + API용 ACM | ⬜ 미구현(도메인 연결 기준) — **로드밸런서 컨트롤러 자체는 IRSA Role apply + Helm 설치 + 실제 ALB 응답까지 검증 완료**(2026-08-11, ECR/EKS/ALB Controller 절 참고), 검증 후 destroy | 5번(로드밸런서 컨트롤러, 재현 방법 검증됨) + 1번(zone) 필요 | (미구현) |
 | 9 | ArgoCD (GitOps 배포, `argocd/`) | ✅ 코드 완료(Helm 설치 절차 + Application manifest 3개), **apply→검증(Git 커밋→자동 배포 왕복)→destroy까지 완료**(2026-08-11, §3, [이슈 #10](https://github.com/LikeLionTeam4/slash-infra/issues/10)) | 5번(EKS 클러스터) 필요 | ArgoCD 자체는 AWS 리소스를 만들지 않아서(ALB Controller와 다름) `helm uninstall`만 하면 됨 — 클러스터 destroy 전 별도 K8s 정리 필수는 아니었음 |
 | 7 | CloudWatch 알람(`modules/observability`) | ✅ 코드 완료, **apply→검증→destroy 완료(현재는 미적용)** (RDS CPU/스토리지만, ALB·GPU 알람은 6번·GPU 노드그룹 생기면 추가) | 4번의 `rds_instance_id` 필요 | 4번(database)**보다 먼저** 지워야 함(§5-2, 알람이 그 인스턴스ID를 참조) |
@@ -32,7 +32,7 @@ Apply는 이 표의 순서대로, **Destroy는 반대 순서**로 진행한다. 
 | `environments/local/network` | 38 | `vpc_id = vpc-0e99fcc8dcea839a0`, NAT 1개(`ap-northeast-2a`) | 적용됨 |
 | `environments/local/frontend` | 12 | `site_url = https://local.sbsh.cloud`, `bucket_name = slash-web-local-727646470302`, `frontend_deploy_role_arn = arn:aws:iam::727646470302:role/slash-frontend-deploy-local` | 적용됨, 콘텐츠까지 배포됨. GitHub OIDC 배포 Role(`modules/frontend-cicd`) 추가 적용(2026-08-05) |
 | `environments/local/cognito` | 3 | `user_pool_id = ap-northeast-2_s2ZnfGrqo`, `user_pool_client_id = 4g9h0vsvel02drlieqbg9n9nhi`, `issuer_url = https://cognito-idp.ap-northeast-2.amazonaws.com/ap-northeast-2_s2ZnfGrqo`, `hosted_domain = https://slash-local-727646470302.auth.ap-northeast-2.amazoncognito.com` | 적용됨, 상시 유지. Managed Login(v2) + 이메일·비밀번호. slash-web/slash-api가 이 값들을 직접 참조하므로 destroy 금지 |
-| `environments/local/eks` (ECR만) | 6 | `ecr_repository_urls = {slash-api, slash-nlu, slash-llm}` (계정 `727646470302`) | **ECR만 적용된 상태로 유지(2026-08-11)** — 클러스터+노드그룹+ALB Controller Role은 세 번(ALB Controller 검증, ArgoCD 검증)까지 apply→destroy를 반복했고 매번 정상 정리됨(§3). 클러스터/ALB Controller/Helm/ArgoCD 검증 이력은 전부 §3에 남아있음, 다시 필요할 때 `terraform apply`(전체) + `helm install`로 재현 가능 |
+| `environments/local/eks` | 22 | `cluster_name = slash-eks-local`, `ecr_repository_urls = {slash-api, slash-nlu, slash-llm}` (계정 `727646470302`) | **클러스터+노드그룹+ALB Controller Role 네 번째 apply 완료(2026-08-12)** — 로컬 배포 시나리오 5종(§7) 검증용, 끝나면 destroy 예정(ECR만 유지). 3개 노드 전부 `Ready`, amd64 확인 |
 | `environments/dev/*` | – | – | 미구축 |
 | `environments/prod/*` | – | – | 미구축 |
 
@@ -87,6 +87,7 @@ Apply는 이 표의 순서대로, **Destroy는 반대 순서**로 진행한다. 
 | 2026-08-11 | ArgoCD (Helm, `argocd` 네임스페이스) + `argocd/`(신규, [이슈 #10](https://github.com/LikeLionTeam4/slash-infra/issues/10)) | 공식 `argo-cd` Helm chart(v7.7.11) 설치 → 전 파드 Running. `argocd/applications/{slash-api,slash-nlu,slash-llm}.yaml` 작성(각각 `helm/<service>` 경로 + `dev` 브랜치 + `values-local.yaml`, `syncPolicy.automated` 켬) → 커밋 후 `dev`에 push, `kubectl apply`로 3개 Application 등록 → 전부 `Synced`, mock 파드 3개 `Running`까지 확인 | ALB Controller는 이번 라운드엔 재설치하지 않아서 `slash-api`의 Ingress는 `Progressing` 상태로 남음(주소 미할당) — 이슈 #10 범위(GitOps 배선 검증)엔 지장 없음, ALB 자체는 §1 6번에서 이미 별도 검증됨. 저장소가 public이라 ArgoCD에 별도 git credential 등록 불필요했음 |
 | 2026-08-11 | GitOps 자동 배포 실제 검증([이슈 #10](https://github.com/LikeLionTeam4/slash-infra/issues/10)) | `helm/slash-api/values-local.yaml`의 `replicaCount`를 1→2로 바꿔 커밋+push만 하고 수동 `kubectl`/`helm` 명령 없이 대기 → **약 3분 48초 뒤 ArgoCD가 자동으로 감지해 sync, 파드 2개로 자동 확장**됨을 확인. 이어서 1로 되돌리는 커밋도 push해서 반대 방향(자동 축소)까지 왕복 검증 — 약 6분 뒤 자동 반영, "Git 커밋 → 배포"가 실제로 무인 자동화되는 것을 최종 확인 | ArgoCD 기본 재동기화 주기(`timeout.reconciliation`, 기본 180초)가 앱마다 정확히 3분 간격은 아니고 앱 컨트롤러 큐 상황에 따라 3~6분 정도 편차가 있었음 — "커밋 후 몇 분 안에 반영되는지"를 딱 잘라 약속하기보다 "수 분 내 자동 반영"으로 이해하는 게 맞음. 검증용 `bash until` 폴링 스크립트에 macOS 기본 환경엔 없는 `timeout` 커맨드를 썼다가 즉시 실패했던 것도 발견 — 이 환경에서 폴링 타임아웃이 필요하면 `SECONDS` 내장변수로 직접 구현할 것 |
 | 2026-08-11 | ArgoCD + `local/eks` destroy(ECR 제외, [이슈 #10](https://github.com/LikeLionTeam4/slash-infra/issues/10) 검증 종료) | `helm uninstall argocd -n argocd` → `kubectl delete namespace argocd` → `aws elbv2 describe-load-balancers`로 `slash-*` ALB가 없는 것 확인(이번 라운드는 ALB Controller 자체를 안 띄웠으므로 예상대로 없음) → 클러스터+노드그룹+Role 등 16개를 `-target`으로 destroy | ArgoCD는 AWS 리소스를 직접 만들지 않아서 ALB Controller 때와 달리 `kubectl delete ingress` 같은 사전 정리가 필수는 아니었음. destroy 후 `terraform plan`으로 "16 to add, 0 to destroy"만 나오는 것까지 확인해 state가 깨끗하게 ECR 6개만 남았음을 재확인 |
+| 2026-08-12 | `local/eks` (네 번째 재apply, §7 로컬 배포 시나리오 검증용) | 클러스터+노드그룹+ALB Controller/Karpenter Role 등 16개 apply → 3개 노드 전부 `Ready`, amd64 확인. `aws eks update-kubeconfig`로 kubeconfig 갱신 | 지난 세 번의 apply와 동일하게 1차 시도부터 문제없이 완료(1분 49초) — §4 launch template/스키마 타임아웃 이슈는 재현 안 됨 |
 
 ### 보안그룹 description의 ASCII 제약 (2026-08-04)
 
@@ -327,3 +328,17 @@ AWS_PROFILE=slash-local terraform destroy -input=false
 - RDS/Valkey, EKS/EC2, ALB Ingress 등 새 모듈을 apply하면 §1(전체 순서, 구현 열을 ✅로)과 §2(현재 적용 상태), §3(Apply 이력)에 반영한다.
 - apply/destroy 중 예상 못 한 에러를 만나면 §4(트러블슈팅 기록)에 원인·조치·교훈을 남긴다 — 다음에 같은 실수를 반복하지 않는 게 목적.
 - destroy 절차(§5)는 새 환경이 추가될 때마다(특히 서로 참조하는 관계가 생기면) 순서를 다시 검토한다.
+
+## 7. 로컬 배포 시나리오 검증 (2026-08-12)
+
+2026-08-11까지의 검증은 "config 값 변경(replicaCount) → ArgoCD 자동 sync" 왕복 1건뿐이었다. 실제 운영에서 자주 벌어질 법한 케이스를 더 대표성 있게 잡기 위해 아래 5개 시나리오를 골라 순서대로 검증한다. 각 시나리오 결과는 완료되는 대로 아래 표와 §3/§4에 기록한다.
+
+| # | 시나리오 | 목적 | 상태 |
+| --- | --- | --- | --- |
+| 1 | 외부 저장소 코드 변경 시뮬레이션 (mock Dockerfile 수정 → 새 태그 build/push → `values-local.yaml` 갱신 → ArgoCD 자동 배포) | `slash-api`/`slash-nlu`/`slash-llm`에 아직 실제 Dockerfile/CI가 없는 상태에서, CI가 있었다면 벌어졌을 "코드 변경→새 이미지 배포" 전체 왕복을 재현 | ⬜ 진행 예정 |
+| 2 | 배포 실패 → 롤백 (존재하지 않는 이미지 태그로 배포 시도 → 실패 감지 → git revert로 복구) | ArgoCD가 실패를 어떻게 드러내는지, 되돌리는 절차가 실제로 동작하는지 확인 | ⬜ 진행 예정 |
+| 3 | Ingress + ALB 실제 트래픽 라우팅 (ALB Controller + ArgoCD 배포물 함께 구동) | 2026-08-11 ArgoCD 검증 라운드에서 ALB Controller를 재설치하지 않아 `Progressing`으로 남았던 Ingress를 실제 주소 할당·응답까지 닫기 | ⬜ 진행 예정 |
+| 4 | ArgoCD self-heal (수동 drift 후 자동 복구) | `syncPolicy.automated.selfHeal`이 git 커밋 없이 발생한 클러스터 직접 변경을 실제로 되돌리는지 확인 | ⬜ 진행 예정 |
+| 5 | 실제 의존성 주입 (RDS/Valkey/Cognito 값이 env/Secret으로 Deployment에 반영) | 배포 파이프라인은 되는데 서비스가 필요로 하는 실제 설정값은 안 들어가는 케이스를 사전에 잡기 | ⬜ 진행 예정 |
+
+검증 전 `environments/local/eks`를 네 번째로 재apply(§3 2026-08-12 항목)해서 클러스터를 다시 올렸다 — 5개 시나리오를 모두 마치면 §5 절차대로 destroy하고(ECR만 유지) 이 표의 상태를 최종 업데이트한다.
