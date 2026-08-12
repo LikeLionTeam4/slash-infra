@@ -7,11 +7,16 @@ serviceAccount:
   # 2026-08-05 local에서 임시 irsa_test.tf로 메커니즘만 검증했고 dev용 상시 Role은 별도 작업 필요
 
 ingress:
-  enabled: true
+  # 2026-08-12: image.tag가 비어 있는 동안 ingress.enabled=true였더니, pod가 못 뜨는 것과
+  # 무관하게 ALB Controller가 실제 ALB를 만들어버렸다(과금 발생, 아무도 명시적으로 켠 적
+  # 없는 부수효과). ArgoCD selfHeal 때문에 kubectl로 직접 지워도 다시 살아나므로, git의
+  # 이 값을 false로 낮춰서 소스에서부터 막는다 — prune:true라 ArgoCD가 알아서 정리한다.
+  # 실제 이미지가 준비되면(이슈 #11) image.tag를 채우는 시점에 같이 true로 되돌릴 것.
+  enabled: false
   host: api.dev.sbsh.cloud
   annotations:
-    # ACM 인증서 적용 완료(2026-08-12, environments/dev/eks/domain.tf, ISSUED 확인).
-    # Route53 A레코드 연결은 실제 앱이 떠서 ALB가 안정적으로 나온 뒤로 미룸(이슈 #11 이후).
+    # ACM 인증서는 이미 발급 완료(2026-08-12, environments/dev/eks/domain.tf, ISSUED) — ingress
+    # 다시 켤 때 그대로 재사용하면 됨. Route53 A레코드 연결은 그 시점에 마저 진행.
     alb.ingress.kubernetes.io/certificate-arn: arn:aws:acm:ap-northeast-2:727646470302:certificate/b2d99be7-1724-40c6-b77c-5ab70943dc34
     alb.ingress.kubernetes.io/listen-ports: '[{"HTTPS":443}, {"HTTP":80}]'
 
