@@ -1,12 +1,18 @@
-# dev 환경 미구축(environments/dev 아직 없음) — 착수 시 아래 값을 채운다.
+# dev 환경 구축 진행 중(2026-08-12, network/cognito/database/eks/observability 적용 완료).
 image:
-  tag: "" # CI(GitHub Actions)가 커밋 SHA로 갱신
+  tag: "" # 아직 비워둠 — slash-api에 실제 Dockerfile/CI가 생기면(이슈 #11) 커밋 SHA로 채워짐
 
 serviceAccount:
-  roleArn: "" # environments/dev/eks apply 후 채운다
+  roleArn: "" # slash-api가 RDS/Valkey Secrets Manager에 접근할 IRSA Role — 아직 미생성,
+  # 2026-08-05 local에서 임시 irsa_test.tf로 메커니즘만 검증했고 dev용 상시 Role은 별도 작업 필요
 
 ingress:
   enabled: true
   host: api.dev.sbsh.cloud
+  annotations:
+    # ACM 인증서 적용 완료(2026-08-12, environments/dev/eks/domain.tf, ISSUED 확인).
+    # Route53 A레코드 연결은 실제 앱이 떠서 ALB가 안정적으로 나온 뒤로 미룸(이슈 #11 이후).
+    alb.ingress.kubernetes.io/certificate-arn: arn:aws:acm:ap-northeast-2:727646470302:certificate/b2d99be7-1724-40c6-b77c-5ab70943dc34
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTPS":443}, {"HTTP":80}]'
 
 replicaCount: 2

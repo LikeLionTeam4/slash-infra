@@ -29,3 +29,7 @@ output "karpenter_controller_role_arn" {
 output "alb_controller_role_arn" {
   value = module.eks.alb_controller_role_arn
 }
+
+output "api_certificate_arn" {
+  value = aws_acm_certificate.api.arn
+}
