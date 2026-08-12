@@ -4,11 +4,12 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 
 SERVICE_NAME = os.environ.get("SERVICE_NAME", "unknown")
 PORT = int(os.environ.get("PORT", "8080"))
+VERSION = "20260812-1"
 
 
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
-        body = json.dumps({"service": SERVICE_NAME, "status": "mock", "path": self.path}).encode()
+        body = json.dumps({"service": SERVICE_NAME, "status": "mock", "version": VERSION, "path": self.path}).encode()
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
