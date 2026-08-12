@@ -29,3 +29,8 @@ output "ecr_repository_urls" {
   description = "local/dev/prod가 공용으로 참조하는 ECR 리포지토리 URL (2026-08-12, modules/eks에서 이전)"
   value       = module.ecr.repository_urls
 }
+
+output "backend_cicd_role_arns" {
+  description = "각 서비스 저장소의 GitHub Actions가 aws-actions/configure-aws-credentials로 assume할 Role ARN (2026-08-12)"
+  value       = { for k, m in module.backend_cicd : k => m.role_arn }
+}

@@ -137,7 +137,7 @@ Slash 프로젝트 전체(웹 프론트엔드 제외 백엔드 서비스군)를 
 - **`aws_iam_openid_connect_provider`(발급자 `token.actions.githubusercontent.com`)는 우리가 만들지 않는다.** 2026-08-05 프론트엔드 CI/CD 작업 중 확인한 사실: 이 계정은 부트캠프 여러 팀이 공유하고 있고(`aws iam list-open-id-connect-providers`로 EKS OIDC provider가 60개 넘게 이미 있음을 확인), GitHub용 provider도 다른 팀(`Team1-front-github-oidc` 태그, 2025-08-01 생성)이 이미 만들어놨다. IAM OIDC provider는 계정에 URL당 1개만 등록 가능해서 우리가 새로 만들면 충돌한다 — Terraform에서 `aws_iam_openid_connect_provider` 리소스로 소유·관리하지 않고, `data "aws_iam_openid_connect_provider"`로 읽기 전용 참조만 한다(예시: `modules/frontend-cicd`). 이 provider의 생명주기(삭제 등)에는 절대 관여하지 않는다 — 다른 팀도 쓰고 있어서 지우면 그쪽 CI가 깨진다.
 - 필요 리소스는 서비스별 IAM Role뿐이다(신뢰 정책을 `repo:LikeLionTeam4/<repo>:ref:refs/heads/<branch>`처럼 저장소·브랜치 단위로 제한). 백엔드는 ECR push 권한, 프론트엔드는 S3/CloudFront 권한(§9-2)으로 Role을 나눠서 최소 권한을 유지한다 — 같은 provider를 참조하는 Role을 서비스마다 여러 개 만드는 구조.
 - **EKS의 IRSA용 OIDC provider(§5)와는 완전히 별개**다 — 발급자도, 신뢰 대상(저장소/브랜치 vs 클러스터의 ServiceAccount)도 다르다.
-- EKS/ECR을 만드는 PH-03 시점에 백엔드용 Role을 추가한다.
+- ~~EKS/ECR을 만드는 PH-03 시점에 백엔드용 Role을 추가한다.~~ → **완료(2026-08-12)**: `modules/backend-cicd`로 `slash-api`/`slash-nlu`/`slash-llm` 각각 Role 생성, `environments/bootstrap`에서 apply(§9-3, §6 — ECR과 같은 이유로 계정 공용 소유). `frontend-cicd`와 달리 환경 접미사 없이 서비스당 Role 1개가 `dev`/`main` 브랜치를 동시에 신뢰 — ECR push 권한은 환경별로 다를 이유가 없어서.
 
 ### 9-2. 프론트엔드 배포 CI/CD (S3 + CloudFront)
 

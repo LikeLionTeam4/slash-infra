@@ -28,7 +28,7 @@ Apply는 이 표의 순서대로, **Destroy는 반대 순서**로 진행한다. 
 
 | 환경 | 리소스 수 | 핵심 output | 상태 |
 | --- | --- | --- | --- |
-| `environments/bootstrap` | 11 | `route53_zone_id = Z03858108FMADVU36PUA`, `bucket_name = slash-tfstate-727646470302`, `ecr_repository_urls = {slash-api, slash-nlu, slash-llm}` | 적용됨. ECR 3+lifecycle policy 3을 `local/eks`에서 이전(2026-08-12, §6) |
+| `environments/bootstrap` | 17 | `route53_zone_id = Z03858108FMADVU36PUA`, `bucket_name = slash-tfstate-727646470302`, `ecr_repository_urls = {slash-api, slash-nlu, slash-llm}`, `backend_cicd_role_arns = {api, nlu, llm}` | 적용됨. ECR 3+lifecycle policy 3을 `local/eks`에서 이전(2026-08-12, §6), 백엔드 CI용 IAM Role 3개(`modules/backend-cicd`, 신규) 추가(§9-3) |
 | `environments/local/network` | 38 | `vpc_id = vpc-0e99fcc8dcea839a0`, NAT 1개(`ap-northeast-2a`) | 적용됨 |
 | `environments/local/frontend` | 12 | `site_url = https://local.sbsh.cloud`, `bucket_name = slash-web-local-727646470302`, `frontend_deploy_role_arn = arn:aws:iam::727646470302:role/slash-frontend-deploy-local` | 적용됨, 콘텐츠까지 배포됨. GitHub OIDC 배포 Role(`modules/frontend-cicd`) 추가 적용(2026-08-05) |
 | `environments/local/cognito` | 3 | `user_pool_id = ap-northeast-2_s2ZnfGrqo`, `user_pool_client_id = 4g9h0vsvel02drlieqbg9n9nhi`, `issuer_url = https://cognito-idp.ap-northeast-2.amazonaws.com/ap-northeast-2_s2ZnfGrqo`, `hosted_domain = https://slash-local-727646470302.auth.ap-northeast-2.amazoncognito.com` | 적용됨, 상시 유지. Managed Login(v2) + 이메일·비밀번호. slash-web/slash-api가 이 값들을 직접 참조하므로 destroy 금지 |
@@ -104,6 +104,7 @@ Apply는 이 표의 순서대로, **Destroy는 반대 순서**로 진행한다. 
 | 2026-08-12 | `dev/observability` (§8 dev 착수 5단계) | `modules/observability` 재사용, `dev/database` 참조도 `terraform_remote_state`로. RDS CPU/스토리지 알람 2개 + SNS 토픽(`alarm_email` 미설정, 구독 없이 토픽만) 등 3개 apply | `aws cloudwatch describe-alarms`로 처음엔 `INSUFFICIENT_DATA` → 72초 뒤 `slash-rds-cpu-dev`가 `OK`로 전환, 실제 CPU 데이터 수신 확인(local의 2026-08-04 검증과 동일 패턴) |
 | 2026-08-12 | ArgoCD + dev Application 매니페스트(§8 6단계) | `slash-eks-dev`에 ArgoCD Helm 설치 → `argocd/applications-dev/`(신규, `values-local.yaml` 대신 `values-dev.yaml` 참조) 3개 `kubectl apply` | `slash-api`/`slash-nlu`/`slash-llm` 전부 `Synced` — Helm chart 렌더링·적용 자체는 정상 작동 확인. 파드는 `InvalidImageName`(예상된 상태, `image.tag`가 아직 빈 값 — 이슈 #11 대기). **의도적으로 여기서 멈춤**: 실제 이미지가 없는 채로 mock 이미지를 다시 붙여 검증할지 물었더니 "Dockerfile 만들어지면 테스트하도록 하면 될 거 같아"로 결정 — local에서 이미 5개 시나리오로 메커니즘 자체는 충분히 검증했다고 판단, 반복 검증 생략 |
 | 2026-08-12 | AWS Load Balancer Controller + ACM 인증서(§8 6단계) | `slash-eks-dev`에 ALB Controller IRSA ServiceAccount + Helm 설치(2/2 Running). `environments/dev/eks/domain.tf`(신규)로 `api.dev.sbsh.cloud` ACM 인증서 + Route53 DNS 검증 레코드 + 검증 완료까지 3개 apply — bootstrap의 `route53_zone_id`는 bootstrap state가 로컬 전용이라(§3 닭-달걀 문제) `terraform_remote_state`로 못 끌어와서 ECR URL과 같은 이유로 정적 값(`Z03858108FMADVU36PUA`)으로 직접 넣음. `helm/slash-api/values-dev.yaml`에 인증서 ARN을 `alb.ingress.kubernetes.io/certificate-arn` 어노테이션으로 미리 반영 | `aws acm describe-certificate`로 `Status: ISSUED` 확인. **Route53 A레코드(ALB 실제 연결)는 의도적으로 미룸** — 지금은 검증할 앱이 없어서(위 항목), 실제 Dockerfile 준비되고 앱이 안정적으로 뜬 뒤에 마저 연결하기로 함 |
+| 2026-08-12 | 백엔드 CI용 IAM OIDC Role(§8 7단계, §9-3) | `modules/backend-cicd`(신규) 작성 — `modules/frontend-cicd`와 같은 패턴(GitHub OIDC, `StringLike`+와일드카드 신뢰 조건)이지만 환경 접미사 없이 서비스당 Role 1개, `dev`+`main` 브랜치를 동시에 신뢰(ECR이 계정 공용이라 환경별로 나눌 이유가 없음). ECR push 권한(`PutImage`/`InitiateLayerUpload` 등)을 해당 서비스 리포지토리 ARN으로만 제한, `GetAuthorizationToken`만 리소스 스코핑 불가라 `*`. `environments/bootstrap`에서 `slash-api`/`slash-nlu`/`slash-llm` 3개 apply(ECR과 같은 이유로 bootstrap 소유) | `aws iam get-role`로 `slash-api-cicd`의 신뢰 정책이 `repo:LikeLionTeam4*/slash-api*:ref:refs/heads/{dev,main}`로 정확히 제한된 것 확인. 실제 워크플로 자체는 아직 없음(이슈 #11 대기) — Role만 미리 준비 |
 
 ### 보안그룹 description의 ASCII 제약 (2026-08-04)
 
@@ -420,7 +421,7 @@ local에서 검증된 모듈을 dev 스펙 값으로 재사용해 `environments/
 | 4 | `dev/eks` — EKS 클러스터 + 노드그룹 (ECR은 bootstrap 참조) | ✅ 완료(2026-08-12) |
 | 5 | `dev/observability` — CloudWatch 알람 + SNS | ✅ 완료(2026-08-12) |
 | 6 | ArgoCD + dev Application 매니페스트 + ALB Controller + `api.dev.sbsh.cloud` 도메인 | 🟡 부분 완료(2026-08-12) — ArgoCD/ALB Controller/ACM 인증서까지 끝, **Route53 A레코드 연결은 실제 앱(이슈 #11) 준비 후로 의도적으로 미룸** |
-| 7 | 백엔드 CI용 IAM OIDC Role(ECR push, 3개 서비스) | ⬜ 진행 예정 |
+| 7 | 백엔드 CI용 IAM OIDC Role(ECR push, 3개 서비스) | ✅ 완료(2026-08-12) |
 
 - local Cognito(`slash-users-local`)와 dev Cognito는 **완전히 별도 User Pool** — network/database/eks와 같은 원칙(환경별 리소스), ECR처럼 AWS 제약으로 강제 공유해야 하는 경우가 아님. 백엔드가 지금 local 값으로 작업 중인 것과는 무관 — `values-dev.yaml`에 dev Pool 값만 새로 채우면 됨, local 쪽엔 영향 없음.
 - 전 구간 apply가 끝나면 §5와 같은 순서(뒤 단계부터)로 한 번에 destroy하고 이 표 상태를 최종 갱신한다.
