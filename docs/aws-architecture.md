@@ -200,6 +200,8 @@ local/dev/prod 3단계로 나눈다. **결정(2026-08-12): 팀 전체가 계정 
 5. **Valkey(ElastiCache)** — RDS와 별개로 상시 과금되는 노드. 최소 타입으로 시작해도 24시간 켜져 있는 비용이 누적됨.
 6. **CloudTrail/CloudWatch/VPC Flow Log 보관** — 보관 기간이 길어지거나 로그량이 많아지면 S3/CloudWatch Logs 비용이 누적되므로 수명주기 정책으로 관리.
 
+**안전망**: `environments/bootstrap`의 `aws_budgets_budget.monthly_cost`(2026-08-12 apply)가 `Project=slash` 태그 기준 월 $100 한도로 실지출 80%/100%·예상지출 100% 시 이메일 알림을 보낸다(계정을 다른 팀과 공유하고 있어서 태그로 스코핑, `docs/operations-log.md` §8-3 참고). $100은 시작값이라 사용 패턴이 바뀌면(dev 상시 운영, prod 착수 등) 조정 필요.
+
 ## 13. 미결정 사항 / TODO
 
 다음 인터뷰 라운드에서 채워야 할 항목:

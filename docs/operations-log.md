@@ -433,7 +433,7 @@ local에서 검증된 모듈을 dev 스펙 값으로 재사용해 `environments/
 | --- | --- | --- |
 | 8 | Karpenter 설치 + NodePool/EC2NodeClass (dev) | ✅ 완료(2026-08-12) — §8-1 |
 | 9 | metrics-server + HPA (dev) | ✅ 완료(2026-08-12) — §8-2 |
-| 10 | AWS Budgets (계정 전체, bootstrap) | ⬜ 진행 예정 |
+| 10 | AWS Budgets (계정 전체, bootstrap) | ✅ 완료(2026-08-12) — §8-3 |
 
 ### 8-1. Karpenter 설치 및 스케일 검증 (완료, 2026-08-12)
 
@@ -451,6 +451,10 @@ IRSA Role(`slash-karpenter-controller-dev`)은 이미 4단계(`dev/eks`)에서 �
 - `helm/slash-api`/`slash-nlu`/`slash-llm` 세 chart 전부에 `autoscaling` values 블록(기본 `enabled: false`) + `templates/hpa.yaml` 추가. **`autoscaling.enabled=true`일 때 `deployment.yaml`이 `spec.replicas` 필드 자체를 렌더링하지 않도록** 했다 — HPA와 정적 `replicaCount`가 동시에 그 필드를 놓고 다투면(Helm/ArgoCD sync가 계속 되돌리려 하고 HPA가 계속 바꾸려 하는 충돌) 오늘 Ingress에서 겪은 selfHeal 충돌과 같은 부류의 문제가 된다는 걸 미리 피한 것
 - `values-dev.yaml` 세 개 다 `autoscaling.enabled: true`로 켜서 push → ArgoCD가 155초 만에 sync → `kubectl get hpa`로 `slash-api`/`slash-nlu`/`slash-llm` 전부 생성 확인(`cpu: <unknown>/70%` — pod가 아직 없어서 예상된 상태, 이슈 #11 이후 실제 지표로 채워짐)
 - `slash-llm`은 GPU 노드그룹이 생기면(#12) GPU 사용률 기반 스케일링이 더 맞을 수 있다는 점을 values.yaml에 comment로 남김 — 그건 custom-metrics-adapter가 필요해 이번 범위 밖
+
+### 8-3. AWS Budgets (완료, 2026-08-12)
+
+`environments/bootstrap`에 `aws_budgets_budget.monthly_cost` 1개 apply — 계정 전체가 아니라 **`Project=slash` 태그가 붙은 리소스만** `TagKeyValue` cost filter로 스코핑(계정을 다른 부트캠프 팀과 공유하고 있어서, 스코핑 안 하면 남의 지출까지 우리 알람에 섞임). 월 $100 한도에 실지출 80%/100%, 예상지출 100% 알림 3개, `baegugureview@gmail.com`으로 이메일 발송. `aws budgets describe-budget`으로 필터·한도 확인. $100은 확정치가 아니라 local/dev를 apply→destroy로 짧게 돌리는 지금 사용 패턴 기준 시작값 — 실측 지출 보고 조정 예정.
 
 ## 9. 확장성 점검 (2026-08-12)
 
