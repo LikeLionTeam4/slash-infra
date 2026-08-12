@@ -2,7 +2,7 @@
 # 실제 slash-api 저장소에 아직 Dockerfile이 없어서, ECR/EKS/ALB 배선 검증용 mock 이미지를 쓴다.
 # 실제 Dockerfile이 생기면 이 태그를 지우고 실제 이미지로 바꾼다.
 image:
-  tag: mock-20260812-amd64
+  tag: mock-20260812-typo-amd64
 
 serviceAccount:
   roleArn: "" # local은 RDS/Secrets Manager를 안 띄우므로 비워둔다
