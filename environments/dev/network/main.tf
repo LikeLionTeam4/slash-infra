@@ -39,12 +39,13 @@ module "network" {
   name_prefix = "slash"
   environment = "dev"
 
-  # local과 CIDR이 겹쳐도 서로 peering하지 않는 별개 VPC라 기술적으로는 문제 없지만,
-  # 나중에 헷갈리지 않도록 dev는 10.1.0.0/16 대역을 쓴다(local은 10.0.0.0/16 기본값).
-  vpc_cidr                 = "10.1.0.0/16"
-  public_subnet_cidrs      = ["10.1.0.0/24", "10.1.1.0/24"]
-  private_app_subnet_cidrs = ["10.1.10.0/24", "10.1.11.0/24"]
-  private_db_subnet_cidrs  = ["10.1.20.0/24", "10.1.21.0/24"]
+  # 환경별로 간격을 둔 CIDR 체계를 쓴다(2026-08-12 결정, docs §4) — 나중에 VPN/Transit
+  # Gateway/peering으로 환경 간 연결이 생겨도 겹치는 대역이 없게: local=10.0.0.0/16,
+  # dev=10.8.0.0/16, prod=10.16.0.0/16(착수 시).
+  vpc_cidr                 = "10.8.0.0/16"
+  public_subnet_cidrs      = ["10.8.0.0/24", "10.8.1.0/24"]
+  private_app_subnet_cidrs = ["10.8.10.0/24", "10.8.11.0/24"]
+  private_db_subnet_cidrs  = ["10.8.20.0/24", "10.8.21.0/24"]
 
   # nat_gateway_per_az는 오버라이드하지 않는다 — 모듈 기본값(true, AZ당 1개)이
   # dev/prod가 쓰기로 한 값과 이미 같다(docs §4, local만 false로 깎아둠).

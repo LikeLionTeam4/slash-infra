@@ -47,6 +47,7 @@ Slash 프로젝트 전체(웹 프론트엔드 제외 백엔드 서비스군)를 
 ## 4. 네트워크 기반
 
 - VPC 1개, 2개 AZ 기준 (`ap-northeast-2a`, `ap-northeast-2c`).
+- **환경별 VPC CIDR은 간격을 둔 체계를 쓴다**(2026-08-12 결정): `local=10.0.0.0/16`, `dev=10.8.0.0/16`, `prod=10.16.0.0/16`(착수 시). 지금은 세 VPC가 서로 peering하지 않아 겹쳐도 기술적으론 무방하지만, 나중에 VPN/Transit Gateway/peering으로 환경 간 연결이 생겨도 라우팅 충돌이 없도록 미리 떨어뜨려둔다. `modules/network`의 `vpc_cidr`/`*_subnet_cidrs` 변수로 각 환경 root에서 오버라이드.
 - 서브넷은 3-tier로 나눈다 — AZ당 public/private-app/private-db 각 1개씩 (총 6개 서브넷). RDS를 EKS 노드와 같은 private 서브넷에 두지 않고 분리하는 이유는 §7 참고.
   - **public** — ALB, NAT Gateway.
   - **private-app** — EKS 노드. NAT Gateway를 통해서만 아웃바운드.

@@ -67,7 +67,7 @@
         </mxCell>
 
         <!-- VPC -->
-        <mxCell id="vpc" value="VPC slash-vpc-dev · 10.1.0.0/16 (environments/dev/network, local과 동일 모듈)" style="rounded=0;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#1a73e8;dashed=1;verticalAlign=top;align=left;fontSize=13;fontStyle=1;spacingLeft=8;spacingTop=8;" vertex="1" parent="1">
+        <mxCell id="vpc" value="VPC slash-vpc-dev · 10.8.0.0/16 (environments/dev/network, local과 동일 모듈)" style="rounded=0;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#1a73e8;dashed=1;verticalAlign=top;align=left;fontSize=13;fontStyle=1;spacingLeft=8;spacingTop=8;" vertex="1" parent="1">
           <mxGeometry x="40" y="420" width="1780" height="880" as="geometry" />
         </mxCell>
         <mxCell id="igw" value="Internet Gateway" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=11;" vertex="1" parent="1">
@@ -78,7 +78,7 @@
         <mxCell id="az_a" value="ap-northeast-2a" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#f0f7ff;strokeColor=#6c8ebf;dashed=1;verticalAlign=top;align=left;fontSize=12;fontStyle=1;spacingLeft=8;spacingTop=8;" vertex="1" parent="1">
           <mxGeometry x="80" y="500" width="850" height="760" as="geometry" />
         </mxCell>
-        <mxCell id="pub_a" value="Public Subnet · 10.1.0.0/24" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;verticalAlign=top;align=left;fontSize=11;fontStyle=1;spacingLeft=6;spacingTop=6;opacity=70;" vertex="1" parent="1">
+        <mxCell id="pub_a" value="Public Subnet · 10.8.0.0/24" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;verticalAlign=top;align=left;fontSize=11;fontStyle=1;spacingLeft=6;spacingTop=6;opacity=70;" vertex="1" parent="1">
           <mxGeometry x="110" y="540" width="790" height="110" as="geometry" />
         </mxCell>
         <mxCell id="nat_a" value="NAT Gateway (AZ-a)&#10;dev: nat_gateway_per_az=true(기본값)&#10;→ AZ마다 1개(local과 다름, §12 비용 2배)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=11;" vertex="1" parent="1">
@@ -87,7 +87,7 @@
         <mxCell id="alb" value="ALB (internet-facing)&#10;ALB Controller가 Ingress로 생성 — dev는 상시 유지&#10;api.dev.sbsh.cloud + ACM 연결" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=11;" vertex="1" parent="1">
           <mxGeometry x="480" y="575" width="260" height="60" as="geometry" />
         </mxCell>
-        <mxCell id="priv_app_a" value="Private-app Subnet · 10.1.10.0/24" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;verticalAlign=top;align=left;fontSize=11;fontStyle=1;spacingLeft=6;spacingTop=6;opacity=70;" vertex="1" parent="1">
+        <mxCell id="priv_app_a" value="Private-app Subnet · 10.8.10.0/24" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;verticalAlign=top;align=left;fontSize=11;fontStyle=1;spacingLeft=6;spacingTop=6;opacity=70;" vertex="1" parent="1">
           <mxGeometry x="110" y="670" width="790" height="170" as="geometry" />
         </mxCell>
         <mxCell id="node1" value="EC2 Node&#10;범용 노드그룹 (t3.medium)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontSize=11;" vertex="1" parent="1">
@@ -96,7 +96,7 @@
         <mxCell id="node2" value="EC2 Node&#10;범용 노드그룹 (t3.medium)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontSize=11;" vertex="1" parent="1">
           <mxGeometry x="400" y="710" width="220" height="60" as="geometry" />
         </mxCell>
-        <mxCell id="priv_db_a" value="Private-db Subnet · 10.1.20.0/24" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;verticalAlign=top;align=left;fontSize=11;fontStyle=1;spacingLeft=6;spacingTop=6;opacity=70;" vertex="1" parent="1">
+        <mxCell id="priv_db_a" value="Private-db Subnet · 10.8.20.0/24" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;verticalAlign=top;align=left;fontSize=11;fontStyle=1;spacingLeft=6;spacingTop=6;opacity=70;" vertex="1" parent="1">
           <mxGeometry x="110" y="860" width="790" height="150" as="geometry" />
         </mxCell>
         <mxCell id="rds_primary" value="RDS PostgreSQL — Primary&#10;db.t4g.small · slash_dev + slash_demo&#10;Multi-AZ 활성(local과 다름, §7-1)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d4f1f4;strokeColor=#0e8088;fontSize=11;" vertex="1" parent="1">
@@ -110,13 +110,13 @@
         <mxCell id="az_c" value="ap-northeast-2c" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#f0f7ff;strokeColor=#6c8ebf;dashed=1;verticalAlign=top;align=left;fontSize=12;fontStyle=1;spacingLeft=8;spacingTop=8;" vertex="1" parent="1">
           <mxGeometry x="960" y="500" width="840" height="760" as="geometry" />
         </mxCell>
-        <mxCell id="pub_c" value="Public Subnet · 10.1.1.0/24" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;verticalAlign=top;align=left;fontSize=11;fontStyle=1;spacingLeft=6;spacingTop=6;opacity=70;" vertex="1" parent="1">
+        <mxCell id="pub_c" value="Public Subnet · 10.8.1.0/24" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;verticalAlign=top;align=left;fontSize=11;fontStyle=1;spacingLeft=6;spacingTop=6;opacity=70;" vertex="1" parent="1">
           <mxGeometry x="990" y="540" width="780" height="110" as="geometry" />
         </mxCell>
         <mxCell id="nat_c" value="NAT Gateway (AZ-c)&#10;dev는 AZ-c도 자체 NAT 보유" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=11;" vertex="1" parent="1">
           <mxGeometry x="1020" y="575" width="220" height="60" as="geometry" />
         </mxCell>
-        <mxCell id="priv_app_c" value="Private-app Subnet · 10.1.11.0/24" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;verticalAlign=top;align=left;fontSize=11;fontStyle=1;spacingLeft=6;spacingTop=6;opacity=70;" vertex="1" parent="1">
+        <mxCell id="priv_app_c" value="Private-app Subnet · 10.8.11.0/24" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;verticalAlign=top;align=left;fontSize=11;fontStyle=1;spacingLeft=6;spacingTop=6;opacity=70;" vertex="1" parent="1">
           <mxGeometry x="990" y="670" width="780" height="170" as="geometry" />
         </mxCell>
         <mxCell id="node3" value="EC2 Node&#10;범용 노드그룹 (t3.medium)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontSize=11;" vertex="1" parent="1">
@@ -125,7 +125,7 @@
         <mxCell id="gpu_note" value="GPU 노드그룹(slash-llm용)&#10;⚠ 스펙/개수 미정 — 이슈 #12" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#b85450;dashed=1;fontSize=11;" vertex="1" parent="1">
           <mxGeometry x="1280" y="710" width="240" height="60" as="geometry" />
         </mxCell>
-        <mxCell id="priv_db_c" value="Private-db Subnet · 10.1.21.0/24" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;verticalAlign=top;align=left;fontSize=11;fontStyle=1;spacingLeft=6;spacingTop=6;opacity=70;" vertex="1" parent="1">
+        <mxCell id="priv_db_c" value="Private-db Subnet · 10.8.21.0/24" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;verticalAlign=top;align=left;fontSize=11;fontStyle=1;spacingLeft=6;spacingTop=6;opacity=70;" vertex="1" parent="1">
           <mxGeometry x="990" y="860" width="780" height="150" as="geometry" />
         </mxCell>
         <mxCell id="rds_standby" value="RDS PostgreSQL — Standby&#10;Multi-AZ 자동 failover 대상" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d4f1f4;strokeColor=#0e8088;dashed=1;fontSize=11;" vertex="1" parent="1">
