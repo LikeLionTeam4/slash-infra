@@ -337,7 +337,7 @@ AWS_PROFILE=slash-local terraform destroy -input=false
 | --- | --- | --- | --- |
 | 1 | 외부 저장소 코드 변경 시뮬레이션 (mock Dockerfile 수정 → 새 태그 build/push → `values-local.yaml` 갱신 → ArgoCD 자동 배포) | `slash-api`/`slash-nlu`/`slash-llm`에 아직 실제 Dockerfile/CI가 없는 상태에서, CI가 있었다면 벌어졌을 "코드 변경→새 이미지 배포" 전체 왕복을 재현 | ✅ 완료(2026-08-12) — 아래 참고 |
 | 2 | 배포 실패 → 롤백 (존재하지 않는 이미지 태그로 배포 시도 → 실패 감지 → git revert로 복구) | ArgoCD가 실패를 어떻게 드러내는지, 되돌리는 절차가 실제로 동작하는지 확인 | ✅ 완료(2026-08-12) — 아래 참고 |
-| 3 | Ingress + ALB 실제 트래픽 라우팅 (ALB Controller + ArgoCD 배포물 함께 구동) | 2026-08-11 ArgoCD 검증 라운드에서 ALB Controller를 재설치하지 않아 `Progressing`으로 남았던 Ingress를 실제 주소 할당·응답까지 닫기 | ⬜ 진행 예정 |
+| 3 | Ingress + ALB 실제 트래픽 라우팅 (ALB Controller + ArgoCD 배포물 함께 구동) | 2026-08-11 ArgoCD 검증 라운드에서 ALB Controller를 재설치하지 않아 `Progressing`으로 남았던 Ingress를 실제 주소 할당·응답까지 닫기 | ✅ 완료(2026-08-12) — 아래 참고 |
 | 4 | ArgoCD self-heal (수동 drift 후 자동 복구) | `syncPolicy.automated.selfHeal`이 git 커밋 없이 발생한 클러스터 직접 변경을 실제로 되돌리는지 확인 | ⬜ 진행 예정 |
 | 5 | 실제 의존성 주입 (RDS/Valkey/Cognito 값이 env/Secret으로 Deployment에 반영) | 배포 파이프라인은 되는데 서비스가 필요로 하는 실제 설정값은 안 들어가는 케이스를 사전에 잡기 | ⬜ 진행 예정 |
 
@@ -357,3 +357,10 @@ AWS_PROFILE=slash-local terraform destroy -input=false
 
 - **주의할 점**: ArgoCD `Application`의 `status.health.status`는 배포 실패 이후에도, 롤백 이후에도 계속 `Progressing`으로 남아있었다 — 원인은 배포 실패와 무관하게 `Ingress` 리소스가 (이 라운드는 ALB Controller를 설치하지 않아서, §7-3 참고) `Progressing`으로 고정돼 있어 리소스 트리 전체의 최악값을 반영하는 Application 헬스를 끌어내리고 있었기 때문. `kubectl get application slash-api -o jsonpath='{.status.resources[*]}'`로 리소스별 헬스를 뜯어보면 `Deployment`는 정확히 `Healthy`/`Progressing`을 반영하고 있었음 — **Application 레벨 헬스만 보고 배포 성공 여부를 판단하면 안 되고, 리소스별 헬스를 봐야 한다**는 게 이번 시나리오의 핵심 교훈.
 - `ImagePullBackOff`는 `kubectl describe pod`의 Events(`Failed`, `BackOff`)로 바로 드러나서 원인 파악 자체는 빨랐음 — Argo UI/CLI만 보고 "그냥 Progressing"이라고 넘기지 말고 파드 이벤트까지 같이 봐야 한다는 점도 재확인.
+
+### 7-3. 시나리오 3 — Ingress + ALB 실제 트래픽 라우팅 (완료, 2026-08-12)
+
+`local/eks`가 만든 IRSA Role(`slash-alb-controller-local`)에 맞춰 `kube-system/aws-load-balancer-controller` ServiceAccount를 직접 생성(`eks.amazonaws.com/role-arn` 어노테이션)한 뒤, `eks/aws-load-balancer-controller` Helm 차트를 `clusterName=slash-eks-local`, `vpcId=<local/network output>`, `serviceAccount.create=false`로 설치 → 컨트롤러 2/2 Running. 기존에 `Progressing`으로 멈춰있던 `slash-api` Ingress가 곧바로 실제 ALB(`k8s-default-slashapi-...`)를 프로비저닝해 `ADDRESS` 필드에 DNS 이름이 채워짐. `aws elbv2 describe-target-health`로 타겟(파드 IP:8080)이 `healthy`인 것, ALB의 보안그룹이 `0.0.0.0/0:80`을 허용하는 것까지 확인.
+
+- **첫 4분간 외부 curl이 전부 연결 실패(`000`)했다** — ALB 상태는 이미 `active`, 타겟도 `healthy`였는데 DNS(`*.elb.amazonaws.com`)가 아직 전파되지 않아서였던 것으로 보임. `aws elbv2 describe-load-balancers`/`describe-target-health`로 AWS 쪽 상태가 먼저 정상인 걸 확인한 뒤 몇 분 뒤 재시도하니 `dig`로 IP 2개가 잡히고 `curl`도 바로 `HTTP/1.1 200 OK` + `{"service": "slash-api", ..., "version": "20260812-1", ...}` 응답을 돌려줌. **교훈**: ALB 생성 직후 curl이 실패한다고 바로 설정 문제로 의심하지 말고, `describe-load-balancers`(State)와 `describe-target-health`부터 확인해 AWS 쪽은 정상인지 먼저 가른 뒤 DNS 전파를 기다리는 순서로 디버깅하는 게 맞다.
+- Ingress가 이 상태가 되면서 §7-2에서 `Progressing`으로 걸려있던 `slash-api` Application의 전체 헬스도 `Healthy`로 정상화됨(리소스별 헬스가 실제로 Application 헬스에 반영되는 것도 재확인).
