@@ -34,7 +34,8 @@ Apply는 이 표의 순서대로, **Destroy는 반대 순서**로 진행한다. 
 | `environments/local/cognito` | 3 | `user_pool_id = ap-northeast-2_s2ZnfGrqo`, `user_pool_client_id = 4g9h0vsvel02drlieqbg9n9nhi`, `issuer_url = https://cognito-idp.ap-northeast-2.amazonaws.com/ap-northeast-2_s2ZnfGrqo`, `hosted_domain = https://slash-local-727646470302.auth.ap-northeast-2.amazoncognito.com` | 적용됨, 상시 유지. Managed Login(v2) + 이메일·비밀번호. slash-web/slash-api가 이 값들을 직접 참조하므로 destroy 금지 |
 | `environments/local/eks` | 0 | – | **미적용(2026-08-12)** — ECR도 bootstrap으로 이전돼서 이제 아무것도 안 남음. 클러스터 재현 이력은 §3/§7 참고 |
 | `environments/dev/network` | 40 | `vpc_id = vpc-087f35750782dd158` (10.8.0.0/16), NAT 2개(AZ당 1개) | **적용됨(2026-08-12)** — dev 착수 1단계, backend "s3"로 처음부터 시작(bucket `slash-tfstate-727646470302`, key `dev/network.tfstate`). CIDR을 10.1.0.0/16→10.8.0.0/16으로 destroy 후 재apply(아래 §3 참고) |
-| `environments/dev/{cognito,database,eks,observability}` | – | – | 미구축 — 순서대로 착수 예정 |
+| `environments/dev/cognito` | 3 | `user_pool_id = ap-northeast-2_90fRvDZrD`, `hosted_domain = https://slash-dev-727646470302.auth.ap-northeast-2.amazoncognito.com` | **적용됨(2026-08-12)** — dev 착수 2단계, local과 완전히 별도 User Pool. `callback_urls`/`logout_urls`에 아직 안 뜬 `dev.sbsh.cloud`도 미리 등록해둠(무해, 나중에 재apply 불필요) |
+| `environments/dev/{database,eks,observability}` | – | – | 미구축 — 순서대로 착수 예정 |
 | `environments/prod/*` | – | – | 미구축 |
 
 계정은 `727646470302`(부트캠프 공유), 리전 `ap-northeast-2`. 이 표는 스냅샷이라 실제 값이 궁금하면 각 디렉터리에서 `terraform output`으로 재확인할 것 — 아래는 마지막 갱신 시점(2026-08-05) 기준.
@@ -95,6 +96,7 @@ Apply는 이 표의 순서대로, **Destroy는 반대 순서**로 진행한다. 
 | 2026-08-12 | ECR을 `local/eks`에서 `bootstrap`으로 이전(§6, dev 착수 전 정리) | `modules/ecr`(신규) 작성 → `environments/bootstrap`에서 `terraform import`로 기존 6개 리소스(리포지토리 3 + lifecycle policy 3) 흡수 → `terraform apply -target=module.ecr`로 태그만 갱신(`Environment: local→shared`, `Service: eks→ecr`) → `local/eks`에서 `terraform state rm`으로 6개 제거, `modules/eks/ecr.tf` 삭제 → 양쪽 `terraform plan`으로 "0 to destroy" 확인(local/eks는 클러스터 재apply분 16개만 남음, ECR 관련 변경 없음), `terraform validate` 통과 | 실제 AWS 리소스는 한 번도 안 건드림(`state rm`/`import`만 사용) — `dev/eks`를 새로 만들 때 같은 이름의 ECR을 또 만들려다 충돌하는 걸 미리 막기 위한 작업. 계정 공유 결정(§11)도 이 김에 문서에 반영 — local도 처음부터 팀 전체가 계정 하나(`727646470302`)를 공유해온 것으로 확인, 문서상 "팀원마다 다른 계정" 문구를 정정 |
 | 2026-08-12 | `dev/network` (§8 dev 착수 1단계, 1차) | VPC(10.1.0.0/16) 등 40개 apply — `modules/network` 재사용, `nat_gateway_per_az` 오버라이드 없이 모듈 기본값(AZ당 1개, local만 예외로 1개로 깎아둔 것) 그대로 사용해 NAT 2개 생성. **처음부터 `backend "s3"`**(`slash-tfstate-727646470302`, key `dev/network.tfstate`, `use_lockfile=true`)로 시작 — local처럼 나중에 옮기지 않음 | `aws ec2 describe-vpcs`/`describe-nat-gateways`로 CIDR·NAT 2개 `available` 상태 확인 |
 | 2026-08-12 | `dev/network` CIDR 변경(10.1.0.0/16 → 10.8.0.0/16) 후 재apply | 환경별로 간격을 둔 CIDR 체계로 정리(local=10.0.0.0/16, dev=10.8.0.0/16, prod=10.16.0.0/16 예정) — VPC CIDR은 생성 후 못 바꿔서(`ForceNew`) destroy 후 재apply. destroy 중 `slash-vpc-flow-logs-dev-727646470302` 버킷만 버저닝 때문에 1차 실패(§4 "versioning 켜진 S3 버킷" 항목과 동일 패턴) → 그 버킷 안의 객체 버전 7개(전부 방금 그 VPC가 만든 flow log, 다른 리소스와 무관 확인 후) 수동 삭제 → 재destroy로 완료 → 새 CIDR로 재apply, `aws ec2 describe-vpcs`로 `10.8.0.0/16` 확인 | dev-architecture.drawio의 CIDR 표기도 같이 갱신(10.1→10.8). §5 destroy 순서상 database/eks가 여기 서브넷을 참조하므로 dev 착수 기간 내내 destroy하지 않고 유지(local의 network과 동일한 취급) |
+| 2026-08-12 | `dev/cognito` (§8 dev 착수 2단계) | `modules/cognito` 재사용, User Pool `slash-users-dev` 등 3개 apply. local Cognito와 완전히 별도 리소스(같은 계정을 공유해도 Cognito는 ECR과 달리 이름 충돌 제약이 없어 환경별로 만드는 게 자연스러움) | `aws cognito-idp describe-user-pool`로 `slash-users-dev` 생성 확인. local Cognito는 이번 작업과 무관하게 그대로 유지(사용자 요청 — "정리하자고 하기 전까지 정리 안 하면 됨") |
 
 ### 보안그룹 description의 ASCII 제약 (2026-08-04)
 
@@ -406,7 +408,7 @@ local에서 검증된 모듈을 dev 스펙 값으로 재사용해 `environments/
 | # | 작업 | 상태 |
 | --- | --- | --- |
 | 1 | `dev/network` — VPC/서브넷, NAT AZ당 1개, `backend "s3"` | ✅ 완료(2026-08-12) — 위 §3 참고 |
-| 2 | `dev/cognito` — 별도 User Pool | ⬜ 진행 예정 |
+| 2 | `dev/cognito` — 별도 User Pool | ✅ 완료(2026-08-12) |
 | 3 | `dev/database` — RDS Multi-AZ + Valkey | ⬜ 진행 예정 |
 | 4 | `dev/eks` — EKS 클러스터 + 노드그룹 (ECR은 bootstrap 참조) | ⬜ 진행 예정 |
 | 5 | `dev/observability` — CloudWatch 알람 + SNS | ⬜ 진행 예정 |
