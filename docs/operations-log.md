@@ -338,7 +338,7 @@ AWS_PROFILE=slash-local terraform destroy -input=false
 | 1 | 외부 저장소 코드 변경 시뮬레이션 (mock Dockerfile 수정 → 새 태그 build/push → `values-local.yaml` 갱신 → ArgoCD 자동 배포) | `slash-api`/`slash-nlu`/`slash-llm`에 아직 실제 Dockerfile/CI가 없는 상태에서, CI가 있었다면 벌어졌을 "코드 변경→새 이미지 배포" 전체 왕복을 재현 | ✅ 완료(2026-08-12) — 아래 참고 |
 | 2 | 배포 실패 → 롤백 (존재하지 않는 이미지 태그로 배포 시도 → 실패 감지 → git revert로 복구) | ArgoCD가 실패를 어떻게 드러내는지, 되돌리는 절차가 실제로 동작하는지 확인 | ✅ 완료(2026-08-12) — 아래 참고 |
 | 3 | Ingress + ALB 실제 트래픽 라우팅 (ALB Controller + ArgoCD 배포물 함께 구동) | 2026-08-11 ArgoCD 검증 라운드에서 ALB Controller를 재설치하지 않아 `Progressing`으로 남았던 Ingress를 실제 주소 할당·응답까지 닫기 | ✅ 완료(2026-08-12) — 아래 참고 |
-| 4 | ArgoCD self-heal (수동 drift 후 자동 복구) | `syncPolicy.automated.selfHeal`이 git 커밋 없이 발생한 클러스터 직접 변경을 실제로 되돌리는지 확인 | ⬜ 진행 예정 |
+| 4 | ArgoCD self-heal (수동 drift 후 자동 복구) | `syncPolicy.automated.selfHeal`이 git 커밋 없이 발생한 클러스터 직접 변경을 실제로 되돌리는지 확인 | ✅ 완료(2026-08-12) — 아래 참고 |
 | 5 | 실제 의존성 주입 (RDS/Valkey/Cognito 값이 env/Secret으로 Deployment에 반영) | 배포 파이프라인은 되는데 서비스가 필요로 하는 실제 설정값은 안 들어가는 케이스를 사전에 잡기 | ⬜ 진행 예정 |
 
 검증 전 `environments/local/eks`를 네 번째로 재apply(§3 2026-08-12 항목)해서 클러스터를 다시 올렸다 — 5개 시나리오를 모두 마치면 §5 절차대로 destroy하고(ECR만 유지) 이 표의 상태를 최종 업데이트한다.
@@ -364,3 +364,10 @@ AWS_PROFILE=slash-local terraform destroy -input=false
 
 - **첫 4분간 외부 curl이 전부 연결 실패(`000`)했다** — ALB 상태는 이미 `active`, 타겟도 `healthy`였는데 DNS(`*.elb.amazonaws.com`)가 아직 전파되지 않아서였던 것으로 보임. `aws elbv2 describe-load-balancers`/`describe-target-health`로 AWS 쪽 상태가 먼저 정상인 걸 확인한 뒤 몇 분 뒤 재시도하니 `dig`로 IP 2개가 잡히고 `curl`도 바로 `HTTP/1.1 200 OK` + `{"service": "slash-api", ..., "version": "20260812-1", ...}` 응답을 돌려줌. **교훈**: ALB 생성 직후 curl이 실패한다고 바로 설정 문제로 의심하지 말고, `describe-load-balancers`(State)와 `describe-target-health`부터 확인해 AWS 쪽은 정상인지 먼저 가른 뒤 DNS 전파를 기다리는 순서로 디버깅하는 게 맞다.
 - Ingress가 이 상태가 되면서 §7-2에서 `Progressing`으로 걸려있던 `slash-api` Application의 전체 헬스도 `Healthy`로 정상화됨(리소스별 헬스가 실제로 Application 헬스에 반영되는 것도 재확인).
+
+### 7-4. 시나리오 4 — ArgoCD self-heal (완료, 2026-08-12)
+
+git 커밋 없이 `kubectl scale deploy slash-api --replicas=4`로 클러스터를 직접 건드려 git 상태(1)와 다른 drift를 만듦. **약 3초 만에** ArgoCD가 감지해 추가로 뜬 파드 3개를 자동으로 `Terminating`시키고 다시 1개로 되돌림 — `kubectl scale` 실행 직후 바로 확인한 파드 목록에 이미 나머지 3개가 `Terminating`으로 찍혀 있었음. `Application` 상태도 최종적으로 `sync=Synced`, `health=Healthy`로 확인.
+
+- **§7-1/§7-2의 "새 커밋 감지"는 160~296초** 걸렸는데, 이번 **"이미 관리 중인 리소스의 drift 복구"는 3초 안팎**으로 훨씬 빨랐다. 원인 추정: 새 커밋 감지는 git 폴링 주기(기본 `timeout.reconciliation` 180초)를 타지만, self-heal은 ArgoCD가 이미 워치하고 있는 클러스터 리소스의 변경 이벤트(k8s watch/informer)에 바로 반응하기 때문 — "git → 클러스터" 방향은 폴링 지연이 있고, "클러스터가 git과 달라짐"은 거의 즉시 반응한다는 비대칭이 있다는 게 이번 시나리오의 핵심 확인 사항.
+- `syncPolicy.automated.selfHeal: true`가 `argocd/applications/*.yaml`에 이미 켜져 있어 별도 설정 변경 없이 바로 검증 가능했음.
