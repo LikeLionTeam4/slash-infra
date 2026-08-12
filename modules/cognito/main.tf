@@ -75,3 +75,51 @@ resource "aws_cognito_user_pool_client" "web" {
     refresh_token = "days"
   }
 }
+
+# Managed Login 화면(로그인 폼) 브랜딩 — DESIGN.md 다크 테마 토큰(서페이스 #12141f,
+# 전경색 #f2f4f8 등)과 실제 로고(logo.png, public/logo.png와 동일)를 반영한다.
+#
+# 이 리소스는 이번에 처음 Terraform으로 들여온 게 아니라, 이미 AWS 콘솔/API로
+# 직접 만들어져 있던 걸 옮겨온 것이다(2026-08-12 발견 — slash-web 쪽에서 로그인 화면을
+# 확인하다가 존재를 알게 됐다). 그 전까지는 코드 어디에도 없는 순수 드리프트였다 —
+# 이 모듈을 재적용하거나 도메인 리소스를 다시 만들면 그대로 사라질 수 있는 상태였다.
+resource "awscc_cognito_managed_login_branding" "web" {
+  user_pool_id = aws_cognito_user_pool.main.id
+  # client_id는 일부러 안 넣는다 — CloudFormation의 Read 핸들러가 이 값을 되돌려주지 않아서,
+  # 이미 있는(import한) 리소스에 뒤늦게 넣으면 Terraform이 "생성 시점에만 되는 값이 바뀌었다"고
+  # 보고 destroy+create로 갈아엎으려 한다(실제로 plan에서 확인함 — 브랜딩이 통째로 사라졌다 다시
+  # 만들어지는 셈이라 위험하다). 이 풀에는 클라이언트가 web 하나뿐이라 풀 단위 브랜딩으로도 결과는
+  # 같다.
+  use_cognito_provided_values = false
+
+  settings = file("${path.module}/branding/settings.json")
+
+  # Cognito의 update-managed-login-branding는 (category, color_mode) 기준으로 upsert만
+  # 한다 — assets 배열에서 항목을 빼도 서버에 이미 있는 자산은 지워지지 않는다(직접 raw
+  # API로도 같은 결과 확인함, Terraform/Cloud Control 쪽 문제가 아니다). 그래서 DYNAMIC도
+  # 계속 선언해서 최소한 내용은 LIGHT/DARK와 같은 작은 이미지로 맞춰 둔다 — 안 그러면 옛날에
+  # 콘솔로 올렸던 500x500(263KB) 원본이 영영 그대로 남아 매 plan마다 diff가 뜬다.
+  #
+  # 순서도 AWS가 실제로 돌려주는 순서(DARK, DYNAMIC, LIGHT)를 그대로 맞춘다 — Cloud Control이
+  # 이 리스트를 위치 기준으로 비교해서, 내용이 완전히 같아도 순서가 다르면 매번 diff가 뜬다.
+  assets = [
+    {
+      category   = "FORM_LOGO"
+      color_mode = "DARK"
+      extension  = "PNG"
+      bytes      = filebase64("${path.module}/branding/logo.png")
+    },
+    {
+      category   = "FORM_LOGO"
+      color_mode = "DYNAMIC"
+      extension  = "PNG"
+      bytes      = filebase64("${path.module}/branding/logo.png")
+    },
+    {
+      category   = "FORM_LOGO"
+      color_mode = "LIGHT"
+      extension  = "PNG"
+      bytes      = filebase64("${path.module}/branding/logo.png")
+    },
+  ]
+}
