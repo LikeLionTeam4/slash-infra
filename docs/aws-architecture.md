@@ -239,7 +239,7 @@ local/dev/prod 3단계로 나눈다. **결정(2026-08-12): 팀 전체가 계정 
 - ~~ALB Ingress Controller 실제 설치~~ → IRSA Role apply + Helm 설치 + mock 이미지로 실제 ALB 응답까지 검증 완료(2026-08-11, §8). 도메인/ACM 연결과 상시 운영은 dev 환경 구축 후([이슈 #10](https://github.com/LikeLionTeam4/slash-infra/issues/10))
 - ~~ArgoCD 설치 및 GitOps 저장소 구조~~ → `helm/` 위치 결정 + local 클러스터에서 ArgoCD 설치·GitOps 자동 배포 왕복 검증까지 완료(2026-08-11, §9, [이슈 #10](https://github.com/LikeLionTeam4/slash-infra/issues/10)). dev 계정 구조가 정해지고 dev 환경이 실제로 구축되면 같은 `argocd/` manifest를 `values-dev.yaml` 기준으로 옮겨 상시 운영 전환
 - ~~GPU 인스턴스 정확한 타입/개수~~ → **결정 변경(2026-08-13, [이슈 #12](https://github.com/LikeLionTeam4/slash-infra/issues/12)): GPU 노드그룹 대신 독립 EC2(`g4dn.xlarge`) 1대, stop/start로 운용.** 상세는 §5-1. 실제 Gemma 모델 크기(2B/7B/9B)에 따라 16GB VRAM으로 부족할 수 있어 `slash-llm` 팀 확인은 여전히 필요
-- `slash-nlu`의 컴퓨트 요구사항 (CPU 규모, 메모리) — Kiwi 기반이라 GPU는 불필요할 것으로 추정하나 확정 필요
+- ~~`slash-nlu`의 컴퓨트 요구사항~~ → **실측 완료(2026-08-13, `docs/operations-log.md` §10-2)**: GPU는 예상대로 불필요. 다만 Kiwi 형태소 사전 로딩 때문에 api/llm과 같은 128Mi/256Mi 기본값으론 `OOMKilled` — `helm/slash-nlu/values.yaml`을 384Mi/768Mi로 상향해 정상 기동 확인. 정확한 최소값은 아직 안 좁혀둠(넉넉히 잡은 값)
 - prod 환경의 네임스페이스 분리 vs 클러스터 분리 (§11) — **추천(2026-08-12): 클러스터 분리.** VPC·RDS·Cognito는 이미 dev/prod를 완전히 분리하기로 했는데 EKS 컨트롤플레인만 공유하면 일관성이 깨지고, dev의 실수(예: 2026-08-12에 겪은 orphan ALB류)가 prod 워크로드에 물리적으로 영향을 못 주게 격리하는 게 안전하다. 클러스터당 월 ~$75 추가 비용은 있지만 이미 dev용 클러스터를 별도로 두기로 한 시점에서 증분은 크지 않음
 - ~~Helm chart를 slash-infra 내부에 둘지, 별도 저장소로 분리할지~~ → **결정: `slash-infra` 내부(`helm/`)로 확정**(2026-08-11). Terraform이 만드는 IRSA Role ARN 등과 값이 맞물려 있어 같은 저장소/같은 PR로 바꾸는 게 안전하고, 지금 규모(단일 담당자, 남은 기간 짧음)에서 저장소를 나누는 비용이 더 크다고 판단. CI가 이미지 태그를 자주 커밋하기 시작해 git log가 지저분해지면 그때 분리 재검토
 - CloudTrail 로그 보관 기간(지금은 90일 잠정 기본값), CloudWatch 알람의 실제 임계값(지금은 CPU 80%/스토리지 2GB 잠정값) — 트래픽 실측 후 조정

@@ -500,3 +500,30 @@ dev 구축이 끝난 뒤 "이 구조가 실제 트래픽 증가에도 버티는�
   4. RDS read replica / Valkey 스케일아웃 없음 — **의도적으로 보류**: dev엔 read replica 효과를 검증할 실제 읽기 부하가 없어서, 지금 만들면 비용만 나가고 검증 가치가 없음. 실사용자 트래픽 생기면 재검토
   5. AWS Budgets(계정 전체 비용 알림) 없음 → 진행 예정(§8 표 10번, `environments/bootstrap` 소유)
 - `slash-api`의 HikariCP 커넥션 풀 설정에 "최대 replica × 풀 크기가 RDS `max_connections`의 70%를 넘지 않게 관리"라는 comment가 이미 있음 — 스케일링을 아예 고려 안 한 설계는 아니었다는 신호.
+
+## 10. LLM 런타임(Ollama EC2) 구축 + dev 3서비스 배포 검증 + destroy (2026-08-13)
+
+이슈 #12를 "GPU 노드그룹" → "EKS 밖 독립 EC2"로 결정 변경(§5-1)한 뒤 실제로 구축, 세 서비스(`slash-api`/`slash-nlu`/`slash-llm`) 전부 dev에 실제로 띄워보고, 검증이 끝난 뒤 이번에도 전체 destroy로 마무리했다.
+
+### 10-1. Ollama EC2 구축 + 검증
+
+- `modules/network`에 `ollama` 보안그룹 신설(`db` SG와 동일 패턴, EKS SG에서만 11434 인바운드) → `dev/network` 재apply
+- 신규 `modules/llm-runtime` + `environments/dev/llm-runtime` — `g4dn.xlarge`, AWS Deep Learning Base GPU AMI(SSM 파라미터로 조회, NVIDIA 드라이버 내장, 루트 볼륨 75GB gp3), SSM instance profile(SSH 불필요), `user_data`(cloud-init 최초 1회)로 Ollama 설치 + `ollama pull gemma3:4b`. AMI가 "latest" SSM 파라미터를 따라가며 재생성되지 않도록 `lifecycle.ignore_changes = [ami]` 명시(stop/start로 상태 보존하는 설계 의도 보호)
+- **버그 발견**: `user_data`의 `ollama pull` 단계가 `$HOME` 미설정으로 최초 실행 시 실패(`panic: $HOME is not defined`) — Ollama systemd 서비스 자체(0.0.0.0:11434 바인딩)는 정상, pull만 실패. `export HOME=/root`로 스크립트 수정, 이번 인스턴스는 SSM으로 수동 pull해 우회 검증
+- `helm/slash-llm/values-dev.yaml`에 `image.tag`(PR #2 머지 커밋) + `env.OLLAMA_URL`(EC2 private IP, 정적 값) 배선 → ArgoCD sync → **실제 EKS 파드 → Ollama EC2 → 실제 Gemma3 요약 응답까지 왕복 확인**
+
+### 10-2. slash-api/slash-nlu CI 검토
+
+- `slash-llm`(#2)·`slash-nlu`(#4) — 팀원이 올려둔 Dockerfile+CI(test→container-build→publish-image) PR을 리뷰 후 머지. `slash-llm`은 머지 시 `.github/workflows/test.yml` 수정 포함이라 `workflow` OAuth scope 문제로 1차 머지 실패 → 사용자가 scope 추가 후 재시도로 해결
+- **`slash-api`는 Dockerfile(PR #14)만 있고 CI 자체가 없던 것을 발견** — ECR에 이미지가 한 번도 push된 적 없었음. llm/nlu와 동일 패턴으로 워크플로 작성해 PR #28 오픈
+  - 로컬에서 `linux/amd64` 빌드 시도 시 QEMU 에뮬레이션 SSL 핸드셰이크 실패(Gradle wrapper 다운로드 단계, 반복 재현) → 네이티브(arm64) 빌드는 통과해 에뮬레이션 문제로 확정, GitHub Actions 네이티브 러너에 맡기기로 함
+  - 최초 CI 실행에서 `TimeZoneContractTest`(DB 서버 기본 timezone 검사, `pg_settings.reset_val`) 1개만 실패 — `services:` 블록이 `command` 오버라이드를 지원하지 않아 `docker-compose.yml`의 `-c timezone=Asia/Seoul`이 빠진 것으로 추정하고 수동 `docker run`으로 교체했으나 재현 안 됨(postgres 직접 조회로는 `reset_val`이 테스트 전후 모두 `Asia/Seoul`이었음)
+  - **팀원이 같은 브랜치에 직접 커밋해 실제 원인 수정**: "DB 서버 기본 시간대 시험이 JVM 시간대를 보고 있었다" — GitHub Actions 러너의 JVM 기본 타임존(UTC) 문제였음. `container-build`의 헬스체크에도 DB 연결 필요함을 발견해 같이 보완. 이후 CI 전부 통과, PR #28 머지 → `sha-2b3a753d...` 이미지 ECR push 확인
+- `helm/slash-nlu/values-dev.yaml`에 `image.tag`(PR #4 머지 커밋) 배선 → ArgoCD sync 후 파드가 `OOMKilled`(exit 137) — `helm/slash-nlu/values.yaml`의 128Mi/256Mi(api/llm과 동일 기본값)가 Kiwi 형태소 사전 로딩엔 부족했던 것. §13 TODO였던 "slash-nlu 컴퓨트 요구사항 미확정"이 실측으로 확인된 것 — 384Mi/768Mi로 상향 후 정상 기동, `/health`+`/internal/v1/nlu/analyze` 실제 요청 왕복까지 확인
+- `slash-api`는 이미지는 준비됐지만 아직 못 띄움 — DB/Valkey/Cognito 자격증명을 Secrets Manager에서 주입받게 설계돼 있는데 `helm/slash-api/templates/deployment.yaml`이 `secretKeyRef`를 지원하지 않고(평문 `env`만 가능) IRSA Role도 미생성. 게다가 dev Valkey(ElastiCache)는 AUTH 토큰이 필요한데 `application*.yml` 어디에도 `spring.data.redis.password` 설정이 없어 인프라를 다 맞춰도 앱 코드가 막는 상태 — [이슈 #23](https://github.com/LikeLionTeam4/slash-infra/issues/23)로 정리, 다음 라운드로 이월
+
+### 10-3. dev 전체 destroy
+
+K8s부터 정리(ArgoCD Application 3개 삭제 → `deployment,hpa,service,serviceaccount` label selector로 직접 삭제 → `helm uninstall aws-load-balancer-controller`/`argocd`, CRD는 보존 — 이번 라운드는 Karpenter 미설치라 그 단계는 생략) → Terraform destroy를 의존관계 역순으로 진행: `llm-runtime`(4, network의 SG/서브넷 참조라 가장 먼저) → `observability`(3) → `eks`(19) → `database`(7) → `cognito`(4) → `network`(40, flow-log 버킷에 335개 버전 쌓여있어 `delete-objects`로 먼저 비움 — destroy 도중 flow log가 몇 초간 더 써서 3개가 남았고, 그 3개도 재확인 후 마저 삭제해 완료). ECR/백엔드 CI Role(3개)/AWS Budgets는 계정 공용이라 유지.
+
+최종 확인은 지난 라운드 교훈대로 `resourcegroupstaggingapi`(캐시 지연 있음) 대신 `describe-vpcs`/`describe-nat-gateways`/`describe-db-instances`/`describe-user-pool`/`describe-replication-groups`/`describe-instances`로 직접 확인 — 전부 빈 결과 또는 `NotFound`로 실제 삭제 확인. 6개 `environments/dev/*` 모두 `terraform state list` 0개.
