@@ -1,6 +1,7 @@
-# dev 환경 구축 진행 중(2026-08-12).
+# dev 환경 구축 진행 중(2026-08-12). slash-nlu는 외부 설정(DB/Secrets) 없이 자체
+# 완결적으로 동작해 image.tag 외에 다른 배선이 필요 없다.
 image:
-  tag: "" # CI가 커밋 SHA로 갱신 — 아직 없음(이슈 #11)
+  tag: "sha-367bc355d00e2501223efc1348a1fe7ad5c628b0" # PR #4 머지 커밋(이슈 #11)
 
 replicaCount: 2
 
