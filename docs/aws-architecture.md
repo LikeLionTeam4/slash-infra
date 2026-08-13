@@ -69,10 +69,37 @@ Slash 프로젝트 전체(웹 프론트엔드 제외 백엔드 서비스군)를 
 
 - 클러스터 1개 (`slash-eks-<env>`), private-app 서브넷에 워커 노드 배치. 버전은 명시하지 않고 AWS 기본값(그 시점 최신 지원 버전) 사용.
 - 범용 노드그룹 EC2 3대(desired=3, min=2, max=4)로 시작 — 온디맨드, `network` 모듈의 `eks_security_group_id`를 launch template으로 명시 부착(EKS가 기본 생성하는 SG 대신 우리가 설계한 self-referencing SG를 쓰기 위해). 노드 IAM Role은 최소 권한(Worker/CNI/ECR ReadOnly/SSM)만 부여 — SSH 키 없이 SSM 세션으로 접속.
-- **GPU 노드그룹(`slash-llm`용)은 다음 조각으로 미룸** — 인스턴스 타입/개수 아직 미정(§13).
+- **GPU 노드그룹(`slash-llm`용)은 만들지 않기로 확정(2026-08-13, [이슈 #12](https://github.com/LikeLionTeam4/slash-infra/issues/12))** — Ollama 런타임은 EKS 밖 독립 EC2로 대체한다. 이유와 상세는 §5-1.
 - IRSA 활성화 — 클러스터 생성 시 AWS가 발급하는 클러스터 전용 OIDC 발급자를 `aws_iam_openid_connect_provider`로 등록해서, 파드가 자기 ServiceAccount 신원으로 IAM Role을 빌려쓸 수 있게 한다(§7-1의 Secrets Manager 접근이 이 경로를 씀). GitHub Actions용 OIDC provider(§9-1)와는 별개의 리소스.
 - **오토스케일러는 Karpenter로 확정.** 단 이번 조각에는 컨트롤러용 IRSA Role(`karpenter_controller_role_arn`)만 준비 — Karpenter 자체(Helm 설치, NodePool/EC2NodeClass CRD)는 K8s 내부 리소스라 GitOps로 별도 설치. 노드에 붙일 인스턴스 프로필은 범용 노드그룹과 동일한 Role을 재사용.
 - ALB Ingress Controller(§8)도 같은 이유로 이번 조각엔 없음 — Helm 설치는 GitOps, IRSA Role은 그 조각에서 준비.
+
+### 5-1. LLM 추론 런타임 (Ollama, EC2 — EKS 밖)
+
+**결정(2026-08-13, [이슈 #12](https://github.com/LikeLionTeam4/slash-infra/issues/12)): GPU 노드그룹 대신 독립 EC2 1대에 Ollama+Gemma3를 직접 설치한다.** 2026-08-12에는 `g4dn.xlarge` Spot + Karpenter 0-scale을 추천안으로 뒀었으나 아래 두 이유로 뒤집었다:
+
+1. **콜드스타트**: Karpenter 0-scale은 스케일업마다 새 노드가 뜨는 구조라, 커스텀 AMI 없이는 Ollama 설치+`gemma3:4b` pull(수 GB)을 매번 반복해야 한다 — 5~10분+ 소요 추정, `slash-llm`의 기본 `LLM_TIMEOUT=120초`로는 사실상 타임아웃. 커스텀 AMI 빌드 파이프라인(Packer 등)은 지금 팀 규모/일정엔 과함.
+2. **비용**: GPU 상시 가동은 On-demand 기준 월 ~$472, Spot이어도 ~$161~241 — `environments/bootstrap`의 계정 전체 월 $100 예산(§12)과 정면 충돌.
+
+**아키텍처**: `slash-llm`(EKS, Helm/ArgoCD, `slash-api`/`slash-nlu`와 동일 GitOps 패턴)은 그대로 둔다 — 입력 검증·프롬프트 구성·동시성 제어(`LLM_MAX_CONCURRENT_REQUESTS`)·에러 정규화를 담당하는 실제 서비스 레이어라 EKS 표준 배포에서 뺄 이유가 없다. 그 뒤에서 호출하는 Ollama만 EKS 밖 EC2로 분리한다.
+
+```
+slash-web → slash-api → slash-llm(EKS) → Ollama(EC2, EKS 밖) → 역순 응답
+```
+
+- **네트워크**: `modules/network`에 `ollama` 보안그룹 신설 — `db` SG와 동일 패턴으로 `eks` SG에서만 11434 인바운드 허용. `private_app` 서브넷에 배치(NAT로 아웃바운드 인터넷 가능, 최초 설치 때 필요).
+- **컴퓨트**: 신규 `modules/llm-runtime`(+ `environments/dev/llm-runtime`) — `g4dn.xlarge`, AWS Deep Learning Base GPU AMI(NVIDIA 드라이버 내장), SSM 세션 매니저용 IAM instance profile(SSH 키 불필요), `user_data`(cloud-init, 최초 부팅 1회만 실행)로 Ollama 설치 + `ollama pull gemma3:4b`. `Project=slash` 태그 필수(§12 예산 필터에 잡히게).
+- **상태 보존**: 인스턴스는 stop/start로 운용한다(터미네이트 아님) — EBS 루트 볼륨이 유지돼 재기동 시 재설치·재pull이 없다. Private IP도 stop/start로는 안 바뀐다.
+- **연결**: `helm/slash-llm/values-dev.yaml`의 `env.OLLAMA_URL`에 이 EC2의 private IP를 정적으로 채운다(`image.repository`처럼 정적 값 — 계정/환경이 바뀌면 수동 갱신, 별도 private DNS 존은 만들지 않는다).
+- **스케줄링**: 초기엔 수동 stop/start. dev 트래픽 패턴이 확인되면 EventBridge Scheduler + SSM Automation으로 자동화를 후속 검토한다.
+- **미해결**: `slash-llm`의 `/health`가 Ollama 연결 여부와 무관하게 항상 `{"status":"ok"}`를 반환한다(`main.py:76-78`) — Ollama가 죽어도 K8s가 파드를 정상으로 판단해 트래픽을 계속 흘려보낸다. `slash-llm` 팀에 `/health`가 Ollama 상태를 반영하도록 개선을 요청함(전달 완료, 2026-08-13) — 확정되면 readinessProbe 추가와 함께 반영.
+
+**구현 체크리스트**:
+- [x] `slash-llm` Dockerfile/CI/ECR push(PR #2, 2026-08-13 `dev` 머지) — `sha-78805a7108187751b1eb9283164c5071bd96f164` 이미지 push 확인
+- [ ] `modules/network`에 `ollama` 보안그룹 추가
+- [ ] `modules/llm-runtime` + `environments/dev/llm-runtime` 작성 → apply
+- [ ] `helm/slash-llm/values-dev.yaml`에 `image.tag` + `env.OLLAMA_URL` 채우기
+- [ ] EKS 파드 → Ollama EC2 실제 통신 검증(`curl`, 실제 요약 요청 왕복)
 
 ## 6. 컨테이너 레지스트리
 
@@ -194,7 +221,7 @@ local/dev/prod 3단계로 나눈다. **결정(2026-08-12): 팀 전체가 계정 
 예산에 영향이 큰 순서대로:
 
 1. **EKS 컨트롤플레인 고정비** — 클러스터당 시간당 과금, 환경을 늘릴수록 누적.
-2. **GPU 노드(slash-llm)** — 온디맨드 g4dn/g5는 시간당 비용이 큼. 스팟 인스턴스 활용이나 오토스케일 0-scale로 완화 가능하지만 콜드스타트 트레이드오프 있음.
+2. **LLM 런타임 EC2(`g4dn.xlarge`, §5-1)** — GPU 인스턴스라 시간당 비용이 큼(On-demand ~$0.65/h, Spot ~$0.22~0.33/h, ap-northeast-2 기준). 상시 가동은 월 $100 예산과 충돌해 stop/start 스케줄로 운용한다.
 3. **NAT Gateway** — dev/prod는 AZ당 1개(§4)라 시간당 과금 + 데이터 처리 비용이 2배로 발생. local은 1개로 아낀다. S3 접근은 Gateway Endpoint(§4-1)로 우회해 데이터 처리 비용 일부는 줄인다.
 4. **RDS Multi-AZ** — dev/prod는 활성화(§7-1)라 인스턴스 비용이 2배로 발생 — 기존 "prod만 Multi-AZ" 가정에서 변경됨.
 5. **Valkey(ElastiCache)** — RDS와 별개로 상시 과금되는 노드. 최소 타입으로 시작해도 24시간 켜져 있는 비용이 누적됨.
@@ -211,7 +238,7 @@ local/dev/prod 3단계로 나눈다. **결정(2026-08-12): 팀 전체가 계정 
 - Karpenter 실제 설치(Helm, NodePool/EC2NodeClass) — IRSA Role은 `eks` 모듈에 준비됐지만 한 번도 설치해본 적 없음(§5)
 - ~~ALB Ingress Controller 실제 설치~~ → IRSA Role apply + Helm 설치 + mock 이미지로 실제 ALB 응답까지 검증 완료(2026-08-11, §8). 도메인/ACM 연결과 상시 운영은 dev 환경 구축 후([이슈 #10](https://github.com/LikeLionTeam4/slash-infra/issues/10))
 - ~~ArgoCD 설치 및 GitOps 저장소 구조~~ → `helm/` 위치 결정 + local 클러스터에서 ArgoCD 설치·GitOps 자동 배포 왕복 검증까지 완료(2026-08-11, §9, [이슈 #10](https://github.com/LikeLionTeam4/slash-infra/issues/10)). dev 계정 구조가 정해지고 dev 환경이 실제로 구축되면 같은 `argocd/` manifest를 `values-dev.yaml` 기준으로 옮겨 상시 운영 전환
-- GPU 인스턴스 정확한 타입/개수, 예상 동시 요청 수 — **추천(2026-08-12, [이슈 #12](https://github.com/LikeLionTeam4/slash-infra/issues/12)): `g4dn.xlarge`(T4, 16GB VRAM) 1대(min=0/max=1~2), Spot, Karpenter로 idle 시 0-scale.** dev는 QA용이라 상시 가용성이 필요 없다는 전제 — 다만 실제 Gemma 모델 크기(2B/7B/9B)에 따라 16GB로 부족할 수 있어 `slash-llm` 팀 확인 후 최종 확정
+- ~~GPU 인스턴스 정확한 타입/개수~~ → **결정 변경(2026-08-13, [이슈 #12](https://github.com/LikeLionTeam4/slash-infra/issues/12)): GPU 노드그룹 대신 독립 EC2(`g4dn.xlarge`) 1대, stop/start로 운용.** 상세는 §5-1. 실제 Gemma 모델 크기(2B/7B/9B)에 따라 16GB VRAM으로 부족할 수 있어 `slash-llm` 팀 확인은 여전히 필요
 - `slash-nlu`의 컴퓨트 요구사항 (CPU 규모, 메모리) — Kiwi 기반이라 GPU는 불필요할 것으로 추정하나 확정 필요
 - prod 환경의 네임스페이스 분리 vs 클러스터 분리 (§11) — **추천(2026-08-12): 클러스터 분리.** VPC·RDS·Cognito는 이미 dev/prod를 완전히 분리하기로 했는데 EKS 컨트롤플레인만 공유하면 일관성이 깨지고, dev의 실수(예: 2026-08-12에 겪은 orphan ALB류)가 prod 워크로드에 물리적으로 영향을 못 주게 격리하는 게 안전하다. 클러스터당 월 ~$75 추가 비용은 있지만 이미 dev용 클러스터를 별도로 두기로 한 시점에서 증분은 크지 않음
 - ~~Helm chart를 slash-infra 내부에 둘지, 별도 저장소로 분리할지~~ → **결정: `slash-infra` 내부(`helm/`)로 확정**(2026-08-11). Terraform이 만드는 IRSA Role ARN 등과 값이 맞물려 있어 같은 저장소/같은 PR로 바꾸는 게 안전하고, 지금 규모(단일 담당자, 남은 기간 짧음)에서 저장소를 나누는 비용이 더 크다고 판단. CI가 이미지 태그를 자주 커밋하기 시작해 git log가 지저분해지면 그때 분리 재검토

@@ -245,3 +245,30 @@ resource "aws_vpc_security_group_egress_rule" "db_all" {
   ip_protocol       = "-1"
   description       = "Allow all outbound (patching etc.)"
 }
+
+resource "aws_security_group" "ollama" {
+  name = "${var.name_prefix}-ollama-sg-${var.environment}"
+  # Ollama(EC2, LLM 추론 런타임) — 인바운드는 EKS SG에서만.
+  description = "Ollama LLM runtime (EC2) - inbound only from EKS SG"
+  vpc_id      = aws_vpc.main.id
+
+  tags = merge(var.tags, {
+    Name = "${var.name_prefix}-ollama-sg-${var.environment}"
+  })
+}
+
+resource "aws_vpc_security_group_ingress_rule" "ollama_api" {
+  security_group_id            = aws_security_group.ollama.id
+  referenced_security_group_id = aws_security_group.eks.id
+  ip_protocol                  = "tcp"
+  from_port                    = 11434
+  to_port                      = 11434
+  description                  = "Ollama API from EKS SG"
+}
+
+resource "aws_vpc_security_group_egress_rule" "ollama_all" {
+  security_group_id = aws_security_group.ollama.id
+  cidr_ipv4         = "0.0.0.0/0"
+  ip_protocol       = "-1"
+  description       = "Allow all outbound (model pull, patching etc.)"
+}

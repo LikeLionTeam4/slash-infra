@@ -22,6 +22,10 @@ output "db_security_group_id" {
   value = module.network.db_security_group_id
 }
 
+output "ollama_security_group_id" {
+  value = module.network.ollama_security_group_id
+}
+
 output "nat_gateway_ids" {
   value = module.network.nat_gateway_ids
 }

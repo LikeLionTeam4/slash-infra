@@ -37,6 +37,11 @@ output "db_security_group_id" {
   value       = aws_security_group.db.id
 }
 
+output "ollama_security_group_id" {
+  description = "Ollama(LLM 런타임 EC2)용 보안그룹 ID (EKS SG에서만 11434 인바운드 허용)"
+  value       = aws_security_group.ollama.id
+}
+
 output "nat_gateway_ids" {
   description = "AZ => NAT Gateway ID (nat_gateway_per_az=false면 첫 AZ 1개만)"
   value       = { for az, ngw in aws_nat_gateway.main : az => ngw.id }

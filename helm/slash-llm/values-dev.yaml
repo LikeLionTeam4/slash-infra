@@ -1,7 +1,8 @@
-# dev 환경 구축 진행 중(2026-08-12). GPU 노드그룹은 아직 미구축(§13 TODO, 이슈 #12) —
-# 착수 시 image.tag와 함께 nodeSelector/tolerations도 채운다.
+# GPU 노드그룹은 안 만들기로 확정(2026-08-13, 이슈 #12, docs/aws-architecture.md §5-1)
+# — Ollama는 EKS 밖 별도 EC2(environments/dev/llm-runtime)에서 돈다. nodeSelector/
+# tolerations는 그래서 계속 비워둔다.
 image:
-  tag: "" # CI가 커밋 SHA로 갱신 — 아직 없음(이슈 #11)
+  tag: "sha-78805a7108187751b1eb9283164c5071bd96f164" # PR #2 머지 커밋(이슈 #11)
 
 replicaCount: 1
 
@@ -10,3 +11,8 @@ autoscaling:
   minReplicas: 1
   maxReplicas: 3
   targetCPUUtilizationPercentage: 70
+
+env:
+  # environments/dev/llm-runtime의 ollama_private_ip 출력값 — 정적 값(§5-1, image.repository와
+  # 같은 이유). EC2를 stop/start(터미네이트 아님)로 운용하는 한 안 바뀐다.
+  OLLAMA_URL: "http://10.8.10.169:11434"
