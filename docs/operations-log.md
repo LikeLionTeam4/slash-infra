@@ -28,15 +28,19 @@ Apply는 이 표의 순서대로, **Destroy는 반대 순서**로 진행한다. 
 
 | 환경 | 리소스 수 | 핵심 output | 상태 |
 | --- | --- | --- | --- |
-| `environments/bootstrap` | 17 | `route53_zone_id = Z03858108FMADVU36PUA`, `bucket_name = slash-tfstate-727646470302`, `ecr_repository_urls = {slash-api, slash-nlu, slash-llm}`, `backend_cicd_role_arns = {api, nlu, llm}` | 적용됨. ECR 3+lifecycle policy 3을 `local/eks`에서 이전(2026-08-12, §6), 백엔드 CI용 IAM Role 3개(`modules/backend-cicd`, 신규) 추가(§9-3) |
-| `environments/local/network` | 38 | `vpc_id = vpc-0e99fcc8dcea839a0`, NAT 1개(`ap-northeast-2a`) | 적용됨 |
-| `environments/local/frontend` | 12 | `site_url = https://local.sbsh.cloud`, `bucket_name = slash-web-local-727646470302`, `frontend_deploy_role_arn = arn:aws:iam::727646470302:role/slash-frontend-deploy-local` | 적용됨, 콘텐츠까지 배포됨. GitHub OIDC 배포 Role(`modules/frontend-cicd`) 추가 적용(2026-08-05) |
-| `environments/local/cognito` | 3 | `user_pool_id = ap-northeast-2_s2ZnfGrqo`, `user_pool_client_id = 4g9h0vsvel02drlieqbg9n9nhi`, `issuer_url = https://cognito-idp.ap-northeast-2.amazonaws.com/ap-northeast-2_s2ZnfGrqo`, `hosted_domain = https://slash-local-727646470302.auth.ap-northeast-2.amazoncognito.com` | 적용됨, 상시 유지. Managed Login(v2) + 이메일·비밀번호. slash-web/slash-api가 이 값들을 직접 참조하므로 destroy 금지 |
-| `environments/local/eks` | 0 | – | **미적용(2026-08-12)** — ECR도 bootstrap으로 이전돼서 이제 아무것도 안 남음. 클러스터 재현 이력은 §3/§7 참고 |
-| `environments/dev/*` | 0 | – | **전부 미적용(2026-08-12)** — network/cognito/database/eks/observability 전체 destroy 완료. K8s 레벨(ArgoCD Application·Helm 릴리스·Karpenter CRD)도 함께 정리. apply→검증 이력은 §3/§8 참고. ECR/백엔드 CI Role/AWS Budgets는 계정 공용이라 그대로 유지 |
+| `environments/bootstrap` | 17 | `route53_zone_id = Z02458772F0ED1QG30X6D`, `bucket_name = slash-tfstate-061039804626`, `ecr_repository_urls = {slash-api, slash-nlu, slash-llm}`, `backend_cicd_role_arns = {api, nlu, llm}` | 적용됨(새 계정, §3 2026-08-13 계정 재발급 항목 참고). ECR 3+lifecycle policy 3을 `local/eks`에서 이전(2026-08-12, §6), 백엔드 CI용 IAM Role 3개(`modules/backend-cicd`) |
+| `environments/local/network` | 38 | `vpc_id = vpc-0c2e4ead5efa44390`, NAT 1개(`ap-northeast-2a`) | 적용됨 |
+| `environments/local/frontend` | 12 | `site_url = https://local.sbsh.cloud`, `bucket_name = slash-web-local-061039804626`, `frontend_deploy_role_arn = arn:aws:iam::061039804626:role/slash-frontend-deploy-local` | 적용됨, 콘텐츠까지 배포됨. GitHub OIDC 배포 Role(`modules/frontend-cicd`) 적용 |
+| `environments/local/cognito` | 3 | `user_pool_id = ap-northeast-2_pb5emFWag`, `user_pool_client_id = cn58fb2l2vej46fafkmb7au9j`, `issuer_url = https://cognito-idp.ap-northeast-2.amazonaws.com/ap-northeast-2_pb5emFWag`, `hosted_domain = https://slash-local-061039804626.auth.ap-northeast-2.amazoncognito.com` | 적용됨, 상시 유지. Managed Login(v2) + 이메일·비밀번호. slash-web/slash-api가 이 값들을 직접 참조하므로 destroy 금지 |
+| `environments/local/eks` | 0 | – | 미적용 — ECR도 bootstrap으로 이전돼서 이제 아무것도 안 남음. 클러스터 재현 이력은 §3/§7 참고 |
+| `environments/dev/network` | 40 | `vpc_id = vpc-0d91701be83265d29`, NAT 2개(AZ당 1개) | 적용됨(2026-08-13 재구축, §3) |
+| `environments/dev/cognito` | 4 | `user_pool_id = ap-northeast-2_lkECR5t9u` | 적용됨(2026-08-13) |
+| `environments/dev/database` | 7 | `rds_endpoint = slash-rds-dev.c3qme6c6e7fj.ap-northeast-2.rds.amazonaws.com:5432`, `valkey_endpoint = master.slash-valkey-dev.2iapp0.apn2.cache.amazonaws.com` | 적용됨(2026-08-13), RDS Multi-AZ |
+| `environments/dev/eks` | 21 | `cluster_name = slash-eks-dev`, `api_certificate_arn`(ACM, ISSUED) | 적용됨(2026-08-13). ArgoCD + ALB Controller까지 Helm 설치 완료, `argocd/applications-dev/` 3개 Synced |
+| `environments/dev/observability` | 3 | `sns_topic_arn = arn:aws:sns:ap-northeast-2:061039804626:slash-alarms-dev` | 적용됨(2026-08-13) |
 | `environments/prod/*` | – | – | 미구축 |
 
-계정은 `727646470302`(부트캠프 공유), 리전 `ap-northeast-2`. 이 표는 스냅샷이라 실제 값이 궁금하면 각 디렉터리에서 `terraform output`으로 재확인할 것 — 아래는 마지막 갱신 시점(2026-08-05) 기준.
+계정은 `061039804626`(부트캠프 공유, 2026-08-13 재발급 — 옛 계정 `727646470302`는 더 이상 접근 불가). 리전 `ap-northeast-2`. 이 표는 스냅샷이라 실제 값이 궁금하면 각 디렉터리에서 `terraform output`으로 재확인할 것 — 아래는 마지막 갱신 시점(2026-08-13) 기준.
 
 ## 3. Apply 이력
 
@@ -103,6 +107,9 @@ Apply는 이 표의 순서대로, **Destroy는 반대 순서**로 진행한다. 
 | 2026-08-12 | 백엔드 CI용 IAM OIDC Role(§8 7단계, §9-3) | `modules/backend-cicd`(신규) 작성 — `modules/frontend-cicd`와 같은 패턴(GitHub OIDC, `StringLike`+와일드카드 신뢰 조건)이지만 환경 접미사 없이 서비스당 Role 1개, `dev`+`main` 브랜치를 동시에 신뢰(ECR이 계정 공용이라 환경별로 나눌 이유가 없음). ECR push 권한(`PutImage`/`InitiateLayerUpload` 등)을 해당 서비스 리포지토리 ARN으로만 제한, `GetAuthorizationToken`만 리소스 스코핑 불가라 `*`. `environments/bootstrap`에서 `slash-api`/`slash-nlu`/`slash-llm` 3개 apply(ECR과 같은 이유로 bootstrap 소유) | `aws iam get-role`로 `slash-api-cicd`의 신뢰 정책이 `repo:LikeLionTeam4*/slash-api*:ref:refs/heads/{dev,main}`로 정확히 제한된 것 확인. 실제 워크플로 자체는 아직 없음(이슈 #11 대기) — Role만 미리 준비 |
 | 2026-08-12 | dev 전체 리소스 스캔 + Ingress 부수효과 발견/수정 | `aws resourcegroupstaggingapi get-resources`(Project=slash)로 전체 인벤토리 확인 중, `image.tag`가 빈 채로 `ingress.enabled=true`였던 `slash-api`가 **실제 ALB(`k8s-default-slashapi-...`, 과금 중, healthy 타겟 0개)를 만들어낸 것을 발견** — 아무도 명시적으로 켠 적 없는 부수효과. `helm/slash-api/values-dev.yaml`의 `ingress.enabled`를 `false`로 낮춰 git에서부터 커밋 → ArgoCD가 198초 만에 sync해 Ingress 리소스 prune → ALB Controller가 실제 ALB까지 자동 정리 | `kubectl get ingress`로 리소스 사라짐 확인, `aws elbv2 describe-load-balancers`로 ALB 0개 재확인. **교훈**: `kubectl delete`로 직접 지우면 selfHeal이 즉시 되살리므로(§4 2026-08-12 orphan ALB 항목과 동일 원리), git의 소스(values 파일)를 고치는 것만이 durable fix — 실제 이미지가 준비되면(이슈 #11) `image.tag`를 채우면서 `ingress.enabled`도 같이 `true`로 되돌릴 것 |
 | 2026-08-12 | **dev 전체 destroy** (§8 마무리) | K8s 레벨부터 정리: `argocd/applications-dev/` 3개 삭제 → **Application 삭제가 관리 리소스를 자동 prune하지 않는다는 것 발견**(cascade finalizer 미설정) → Deployment/HPA/Service/ServiceAccount를 label selector로 직접 삭제 → `helm uninstall`로 karpenter/aws-load-balancer-controller/metrics-server/argocd 순서로 제거(CRD는 helm 정책상 보존) → `karpenter/dev/nodepool.yaml` 삭제. 이어서 Terraform destroy를 의존관계 역순으로: `observability`(3) → `eks`(19) → `database`(7, RDS Multi-AZ라 5분25초 소요) → `cognito`(3) → `network`(40, 이번에도 flow-log 버킷에 97개 버전 쌓여 있어 미리 비우고 destroy). ECR/백엔드 CI Role/AWS Budgets는 계정 공용이라 그대로 유지 | 전부 "N destroyed, 0 errors"로 완료. `resourcegroupstaggingapi`(Project=slash 태그)로 재스캔했을 때 NAT 2개·dev VPC·dev Cognito Pool·EC2 인스턴스 1개가 아직 남은 것처럼 보여서 각 서비스 API로 직접 재확인 — NAT는 `State: deleted`, VPC/Cognito Pool은 `NotFound`, 인스턴스는 빈 결과로 **전부 실제로는 이미 삭제됨** 확인. **교훈**: `resourcegroupstaggingapi`는 태그 인덱스 캐시라 삭제 직후 몇 분간 지연될 수 있음 — destroy 직후 최종 확인은 이 API보다 `describe-vpcs`/`describe-nat-gateways`/`describe-user-pool` 같은 해당 서비스 API를 직접 쓸 것 |
+| 2026-08-13 | 부트캠프 계정 재발급 발견 및 대응(`727646470302` → `061039804626`) | `dev/*` backend가 옛 계정 S3 버킷을 참조 중이라 `terraform init`부터 막힌 것을 발견 — `bootstrap`/`local`은 이미 새 계정으로 재구성돼 있었는데(오늘 client_id 트러블슈팅의 배경, 위 §4 항목) `dev`만 옛 계정 참조가 안 옮겨진 상태였음. `environments/dev/{network,cognito,database,eks,observability}/main.tf`의 backend bucket 5곳, `helm/{slash-api,slash-nlu,slash-llm}/values.yaml`의 ECR `repository` 3곳, `helm/slash-api/values-dev.yaml`의 ACM `certificate-arn` 계정 부분을 전부 `061039804626`으로 치환 | `aws sts get-caller-identity`로 현재 계정 확인, `aws ecr describe-repositories`로 실제 ECR이 새 계정에 있는 것 확인(치환 전엔 로컬 포함 모든 환경의 ECR push/pull이 실제로는 깨져 있었던 상태) |
+| 2026-08-13 | `dev` 환경 재구축 (network→cognito→database→eks→observability, 계정 재발급 이후 1차) | §8과 동일한 순서·모듈로 재apply: network 40개, cognito 4개(client_id 포함 — §4 항목 실전 검증), database 7개(RDS Multi-AZ, 13분18초), eks 19개(클러스터 생성 8분43초) → **ACM 인증서 DNS 검증에서 `reading Route 53 Hosted Zone (Z03858108FMADVU36PUA): couldn't find resource` 에러**(zone도 계정 재발급으로 ID가 바뀌었는데 `environments/dev/eks/domain.tf`엔 옛 zone ID가 정적 값으로 남아 있었음 — ECR/backend bucket과 같은 패턴의 누락) → `bootstrap` output에서 새 zone ID(`Z02458772F0ED1QG30X6D`) 확인해 교체 후 재plan(2 to add만 남음) → 재apply로 인증서 검증 완료(ISSUED). observability 3개 apply | `kubectl get nodes`로 3개 노드 `Ready` 확인. `helm/slash-api/values-dev.yaml`의 certificate-arn도 실제 발급된 새 ARN(`dae5ed19-...`)으로 갱신 |
+| 2026-08-13 | ArgoCD + ALB Controller + dev Application 재설치, CI Role 확인 | `aws eks update-kubeconfig --name slash-eks-dev` → ArgoCD Helm 설치(argocd 네임스페이스) → `argocd/applications-dev/` 3개 `kubectl apply` → 전부 `Synced` 확인. ALB Controller는 `kube-system/aws-load-balancer-controller` ServiceAccount(IRSA role-arn 어노테이션)를 직접 생성 후 `eks/aws-load-balancer-controller` Helm 설치(2/2 Running). `environments/bootstrap`의 `modules/backend-cicd`(CI IAM Role 3개, ECR push용)는 `terraform plan`이 "No changes"라 새 계정에도 이미 정상 적용돼 있었음을 확인 | 파드 5개(`slash-api` 2, `slash-nlu` 2, `slash-llm` 1) 전부 `InvalidImageName` — 예상된 상태(`image.tag` 아직 빈 값, 이슈 #11 Dockerfile 대기). Helm→ArgoCD→K8s 배선 자체는 정상 작동 확인, 이슈 #11 완료되는 대로 팀원 CI/CD 배포 시 정상 반영되는지 검증 예정 |
 
 ### 보안그룹 description의 ASCII 제약 (2026-08-04)
 
@@ -296,6 +303,18 @@ ECR은 남기고 나머지만 destroy하려고 `terraform destroy -exclude=...`�
 - **원인**: 977e585 당시엔 이미 콘솔/API로 만들어져 있던 브랜딩을 `terraform import`로 가져오는 상황이었다 — 이때 `client_id`를 넣으면 CloudFormation Read 핸들러가 이 값을 안 돌려줘서 Terraform이 "생성 시점에만 되는 값이 바뀌었다"고 보고 destroy+create로 갈아엎으려 했다. 그래서 뺐고, 풀에 클라이언트가 `web` 하나뿐이라 풀 단위 브랜딩으로도 결과가 같아 문제없어 보였다. 그런데 계정을 새로 만들어 리소스가 하나도 없는 상태에서 처음부터 apply하니 `Value null at 'clientId' failed to satisfy constraint`로 생성 자체가 거부됐다 — import 우회가 아니라 신규 생성 시엔 애초에 API가 `client_id`를 필수로 요구했던 것.
 - **조치**: `awscc_cognito_managed_login_branding.web`에 `client_id = aws_cognito_user_pool_client.web.id`를 복원.
 - **교훈**: import 시점에 필요했던 우회를 "이 리소스엔 항상 필요 없는 값"으로 일반화하면 안 된다 — 우회의 전제(이미 존재하는 리소스에 뒤늦게 값을 채우는 상황)가 사라지면(계정 재생성 등) 그 우회 자체가 새 생성 경로를 막는 원인이 될 수 있다.
+
+### 계정 재발급 후 `dev/eks`의 정적 Route53 zone ID가 옛 계정 값으로 남아있었다 (2026-08-13)
+
+`dev/eks` 재apply 중 클러스터·노드그룹까지는 정상 생성됐는데 ACM 인증서 DNS 검증 단계에서 실패했다.
+
+```
+Error: reading Route 53 Hosted Zone (Z03858108FMADVU36PUA): couldn't find resource
+```
+
+- **원인**: `environments/dev/eks/domain.tf`가 `bootstrap` state의 닭-달걀 문제(§3 참고, bootstrap state가 로컬 전용이라 `terraform_remote_state`로 못 끌어옴) 때문에 `route53_zone_id`를 정적 값으로 하드코딩해 두고 있었다. 계정이 재발급되면서 `bootstrap`이 새 Route53 zone을 새 ID로 다시 만들었는데, `domain.tf`의 정적 값은 옛 계정 zone ID 그대로 남아 있었다 — ECR repository URL(helm values), tfstate backend bucket과 완전히 같은 패턴의 누락.
+- **조치**: `bootstrap` 디렉터리에서 `terraform output route53_zone_id`로 새 값(`Z02458772F0ED1QG30X6D`)을 확인해 `domain.tf`에 반영, 재apply.
+- **교훈**: 계정 재발급처럼 계정 전체가 바뀌는 이벤트가 생기면, "정적 값으로 박아둔 이유가 뭐였는지"(이 저장소엔 최소 3곳 — tfstate bucket, ECR URL, Route53 zone ID — 전부 같은 이유인 `terraform_remote_state`/원격 조회 불가)를 먼저 `grep`으로 훑어서 한 번에 찾는 게, 하나씩 apply하다 에러로 발견하는 것보다 낫다. `grep -rl "<옛 계정 ID>"` 한 줄이면 됐을 일이었다.
 
 ## 5. Destroy 절차
 

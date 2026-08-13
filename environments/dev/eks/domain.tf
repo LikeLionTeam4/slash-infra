@@ -4,7 +4,7 @@
 # 아직 참조할 backend가 없는 닭-달걀 문제) terraform_remote_state로 못 끌어온다 — ECR URL을
 # Helm values에 정적 값으로 넣는 것과 같은 이유로(§6), zone_id를 정적 값으로 직접 쓴다.
 locals {
-  route53_zone_id = "Z03858108FMADVU36PUA" # bootstrap output route53_zone_id (sbsh.cloud)
+  route53_zone_id = "Z02458772F0ED1QG30X6D" # bootstrap output route53_zone_id (sbsh.cloud)
 }
 
 resource "aws_acm_certificate" "api" {
