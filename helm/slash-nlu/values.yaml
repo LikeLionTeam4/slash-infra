@@ -22,9 +22,12 @@ service:
 
 env: {}
 
+# Kiwi 형태소 사전을 메모리에 올려서 api/llm과 같은 128Mi/256Mi로는 OOMKilled(2026-08-13
+# dev 배포 검증 중 실측). §13 TODO였던 "slash-nlu 컴퓨트 요구사항 미확정"이 실제로
+# 터진 것 — 정확한 최소값은 아직 안 재봤고, 우선 넉넉히 올려서 기동만 확인한다.
 resources:
   requests:
-    cpu: 100m
-    memory: 128Mi
+    cpu: 200m
+    memory: 384Mi
   limits:
-    memory: 256Mi
+    memory: 768Mi
