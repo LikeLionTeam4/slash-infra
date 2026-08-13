@@ -17,7 +17,7 @@ ingress:
   annotations:
     # ACM 인증서는 이미 발급 완료(2026-08-12, environments/dev/eks/domain.tf, ISSUED) — ingress
     # 다시 켤 때 그대로 재사용하면 됨. Route53 A레코드 연결은 그 시점에 마저 진행.
-    alb.ingress.kubernetes.io/certificate-arn: arn:aws:acm:ap-northeast-2:727646470302:certificate/b2d99be7-1724-40c6-b77c-5ab70943dc34
+    alb.ingress.kubernetes.io/certificate-arn: arn:aws:acm:ap-northeast-2:061039804626:certificate/b2d99be7-1724-40c6-b77c-5ab70943dc34
     alb.ingress.kubernetes.io/listen-ports: '[{"HTTPS":443}, {"HTTP":80}]'
 
 replicaCount: 2
