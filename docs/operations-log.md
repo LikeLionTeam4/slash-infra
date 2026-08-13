@@ -289,6 +289,14 @@ ECR은 남기고 나머지만 destroy하려고 `terraform destroy -exclude=...`�
 - **조치**: `terraform state list`로 전체 리소스를 뽑은 뒤 `grep -v`로 ECR 관련 6개를 제외하고, 나머지 16개를 전부 `-target`으로 나열해서 destroy했다.
 - **교훈**: "일부만 빼고 나머지 전부"가 필요하면 `-target` 여러 개를 나열하는 것 말고 방법이 없다 — 리소스가 많으면 `terraform state list | grep -v ...`로 목록을 뽑아 스크립트로 `-target` 인자를 생성하는 편이 손으로 나열하는 것보다 안전하다.
 
+### `awscc_cognito_managed_login_branding`의 `client_id` 생략은 import 상황 한정 우회였다 (2026-08-13)
+
+977e585(2026-08-12)에서 `client_id`를 일부러 뺐던 게, 계정을 새로 판 뒤 처음부터 apply하니 Cognito API 자체가 생성을 거부하는 문제로 되돌아왔다.
+
+- **원인**: 977e585 당시엔 이미 콘솔/API로 만들어져 있던 브랜딩을 `terraform import`로 가져오는 상황이었다 — 이때 `client_id`를 넣으면 CloudFormation Read 핸들러가 이 값을 안 돌려줘서 Terraform이 "생성 시점에만 되는 값이 바뀌었다"고 보고 destroy+create로 갈아엎으려 했다. 그래서 뺐고, 풀에 클라이언트가 `web` 하나뿐이라 풀 단위 브랜딩으로도 결과가 같아 문제없어 보였다. 그런데 계정을 새로 만들어 리소스가 하나도 없는 상태에서 처음부터 apply하니 `Value null at 'clientId' failed to satisfy constraint`로 생성 자체가 거부됐다 — import 우회가 아니라 신규 생성 시엔 애초에 API가 `client_id`를 필수로 요구했던 것.
+- **조치**: `awscc_cognito_managed_login_branding.web`에 `client_id = aws_cognito_user_pool_client.web.id`를 복원.
+- **교훈**: import 시점에 필요했던 우회를 "이 리소스엔 항상 필요 없는 값"으로 일반화하면 안 된다 — 우회의 전제(이미 존재하는 리소스에 뒤늦게 값을 채우는 상황)가 사라지면(계정 재생성 등) 그 우회 자체가 새 생성 경로를 막는 원인이 될 수 있다.
+
 ## 5. Destroy 절차
 
 destroy는 **apply의 역순**(frontend → observability → database/eks → network → bootstrap, §1 표의 3→7→{4,5}→2→1)으로 진행한다. 순서를 안 지키면 아래처럼 막힌다.

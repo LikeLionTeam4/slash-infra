@@ -85,11 +85,13 @@ resource "aws_cognito_user_pool_client" "web" {
 # 이 모듈을 재적용하거나 도메인 리소스를 다시 만들면 그대로 사라질 수 있는 상태였다.
 resource "awscc_cognito_managed_login_branding" "web" {
   user_pool_id = aws_cognito_user_pool.main.id
-  # client_id는 일부러 안 넣는다 — CloudFormation의 Read 핸들러가 이 값을 되돌려주지 않아서,
-  # 이미 있는(import한) 리소스에 뒤늦게 넣으면 Terraform이 "생성 시점에만 되는 값이 바뀌었다"고
-  # 보고 destroy+create로 갈아엎으려 한다(실제로 plan에서 확인함 — 브랜딩이 통째로 사라졌다 다시
-  # 만들어지는 셈이라 위험하다). 이 풀에는 클라이언트가 web 하나뿐이라 풀 단위 브랜딩으로도 결과는
-  # 같다.
+  # client_id는 실제로 필수다 — 처음엔 옛 계정에서 import한 기존 리소스에 뒤늦게 넣으면
+  # CloudFormation의 Read 핸들러가 이 값을 안 돌려줘서 Terraform이 "생성 시점에만 되는 값이
+  # 바뀌었다"고 보고 destroy+create로 갈아엎으려 해서 일부러 뺐었는데(2026-08-12), 그건 그
+  # 특정 import 상황에서만 필요한 우회였다. 계정을 새로 판 뒤 처음부터 다시 만들어보니
+  # Cognito API 자체가 생성 시점엔 client_id 없이는 거부한다(`Value null at 'clientId' failed
+  # to satisfy constraint`) — 옛 계정 리소스를 전부 지운 지금은 이 우회가 필요 없어서 되돌린다.
+  client_id                   = aws_cognito_user_pool_client.web.id
   use_cognito_provided_values = false
 
   settings = file("${path.module}/branding/settings.json")
