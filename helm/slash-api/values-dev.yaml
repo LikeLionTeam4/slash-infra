@@ -15,9 +15,10 @@ ingress:
   enabled: false
   host: api.dev.sbsh.cloud
   annotations:
-    # ACM 인증서는 이미 발급 완료(2026-08-12, environments/dev/eks/domain.tf, ISSUED) — ingress
-    # 다시 켤 때 그대로 재사용하면 됨. Route53 A레코드 연결은 그 시점에 마저 진행.
-    alb.ingress.kubernetes.io/certificate-arn: arn:aws:acm:ap-northeast-2:727646470302:certificate/b2d99be7-1724-40c6-b77c-5ab70943dc34
+    # ACM 인증서는 이미 발급 완료(2026-08-13, 계정 재발급 후 environments/dev/eks/domain.tf
+    # 재apply로 새로 발급된 값, ISSUED) — ingress 다시 켤 때 그대로 재사용하면 됨. Route53
+    # A레코드 연결은 그 시점에 마저 진행.
+    alb.ingress.kubernetes.io/certificate-arn: arn:aws:acm:ap-northeast-2:061039804626:certificate/dae5ed19-5c5d-49e2-9e38-e61df80da39b
     alb.ingress.kubernetes.io/listen-ports: '[{"HTTPS":443}, {"HTTP":80}]'
 
 replicaCount: 2

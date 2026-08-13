@@ -3,7 +3,7 @@
 # nodeSelector/tolerations를 values-dev.yaml/values-prod.yaml에서 채운다.
 # repository는 정적 값이다 — slash-api/values.yaml과 같은 이유(§11, §13 TODO 참고).
 image:
-  repository: 727646470302.dkr.ecr.ap-northeast-2.amazonaws.com/slash-llm
+  repository: 061039804626.dkr.ecr.ap-northeast-2.amazonaws.com/slash-llm
   tag: "" # values-<env>.yaml에서 반드시 채운다
 
 replicaCount: 1

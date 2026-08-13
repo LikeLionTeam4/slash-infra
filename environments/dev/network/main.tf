@@ -12,7 +12,7 @@ terraform {
   }
 
   backend "s3" {
-    bucket       = "slash-tfstate-727646470302"
+    bucket       = "slash-tfstate-061039804626"
     key          = "dev/network.tfstate"
     region       = "ap-northeast-2"
     use_lockfile = true
