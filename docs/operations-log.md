@@ -527,3 +527,27 @@ dev 구축이 끝난 뒤 "이 구조가 실제 트래픽 증가에도 버티는�
 K8s부터 정리(ArgoCD Application 3개 삭제 → `deployment,hpa,service,serviceaccount` label selector로 직접 삭제 → `helm uninstall aws-load-balancer-controller`/`argocd`, CRD는 보존 — 이번 라운드는 Karpenter 미설치라 그 단계는 생략) → Terraform destroy를 의존관계 역순으로 진행: `llm-runtime`(4, network의 SG/서브넷 참조라 가장 먼저) → `observability`(3) → `eks`(19) → `database`(7) → `cognito`(4) → `network`(40, flow-log 버킷에 335개 버전 쌓여있어 `delete-objects`로 먼저 비움 — destroy 도중 flow log가 몇 초간 더 써서 3개가 남았고, 그 3개도 재확인 후 마저 삭제해 완료). ECR/백엔드 CI Role(3개)/AWS Budgets는 계정 공용이라 유지.
 
 최종 확인은 지난 라운드 교훈대로 `resourcegroupstaggingapi`(캐시 지연 있음) 대신 `describe-vpcs`/`describe-nat-gateways`/`describe-db-instances`/`describe-user-pool`/`describe-replication-groups`/`describe-instances`로 직접 확인 — 전부 빈 결과 또는 `NotFound`로 실제 삭제 확인. 6개 `environments/dev/*` 모두 `terraform state list` 0개.
+
+## 11. dev 상시 운영 전환 준비 — CD 자동화 (2026-08-18)
+
+**결정(2026-08-18, [이슈 #24](https://github.com/LikeLionTeam4/slash-infra/issues/24)):** 지금까지 dev는 라운드마다 apply→검증→destroy를 반복하는 테스트베드였다(§7~§10). 오늘부터 팀원이 서비스 저장소의 `dev` 브랜치에 머지하면 dev 환경에 자동 반영되도록 전환한다 — 이게 의미가 있으려면 dev가 상시로 떠 있어야 하므로, apply→destroy 반복 패턴에서 **상시 운영**으로 전환한다. 이미지 태그 자동반영 방식은 (ArgoCD Image Updater 대신) **서비스 저장소 CI가 slash-infra에 직접 커밋**하는 쪽으로 결정 — 기존 `sha-` 태그·GitOps 패턴과 가장 잘 맞음.
+
+이번 라운드는 실제 apply 없이 **코드 준비만** 진행(다음 라운드에서 apply 예정) — 코드 변경 사항:
+
+### 11-1. slash-api 배포 블로커(이슈 #23) 중 인프라 배선 — Terraform/Helm 준비
+
+- Secret 동기화 방식: **External Secrets Operator(ESO)** 채택(ArgoCD Image Updater와 마찬가지로, AWS Secrets Store CSI Driver보다 GitOps 친화적이라 선택). 컨트롤러 자체에는 AWS 권한을 안 주고, 각 서비스 자신의 IRSA ServiceAccount로 `SecretStore`가 인증하는 구조 — `external-secrets/README.md`(신규, karpenter/README.md와 같은 패턴)에 수동 설치 절차 정리.
+- `modules/eks/slash_api_irsa.tf`(신규): slash-api용 IRSA Role — `alb_controller.tf`/`karpenter.tf`와 같은 패턴이지만 대상은 kube-system 컨트롤러가 아니라 `system:serviceaccount:default:slash-api`. `slash_api_secret_arns` 변수가 비어있으면(RDS/Valkey 없는 환경) Role 자체를 안 만들도록 `count`로 조건부 처리 — local 환경 호환.
+- `environments/dev/eks/main.tf`: `data.terraform_remote_state.database`(신규)로 RDS 마스터 시크릿·Valkey 시크릿 ARN을 읽어와 `slash_api_secret_arns`로 전달. **database가 eks보다 먼저 apply돼 있어야 한다**(기존 순서와 동일, §1).
+- `helm/slash-api/templates/deployment.yaml`: `env`에 `envSecrets`(리스트) 렌더링 추가 — 각 이름이 `<release>-secrets`라는 K8s Secret의 동일한 키를 `secretKeyRef`로 참조.
+- `helm/slash-api/templates/secretstore.yaml`, `externalsecret.yaml`(신규): `externalSecrets.enabled`가 true일 때만 렌더링(기본 false, 다른 환경/차트 동작에 영향 없음 — `helm template` 기본값으로 렌더링해 SecretStore/ExternalSecret이 안 나오는 것 확인).
+- `helm/slash-api/values-dev.yaml`: `env.DB_URL`/`env.VALKEY_HOST`(평문), `externalSecrets.data`(DB_USERNAME/DB_PASSWORD/VALKEY_AUTH_TOKEN, 이슈 #23에 확보된 실제 Secrets Manager ARN 사용)로 실제 값 배선. `VALKEY_AUTH_TOKEN`은 slash-api 앱이 아직 안 읽는 잠정 키 이름(이슈 #23 "문제 1", 앱 코드는 slash-api 팀 몫) — 실제 설정 키가 정해지면 갱신 필요.
+- `serviceAccount.roleArn`은 여전히 빈 값 — `environments/dev/eks` apply 후 신규 output `slash_api_role_arn`으로 채워야 함(다음 라운드).
+- `helm lint`/`helm template`(기본값·`values-dev.yaml` 둘 다), `terraform validate`(`modules/eks`, `environments/dev/eks`, `-backend=false`)로 검증 완료. 실제 AWS apply·ESO 동작 검증은 다음 라운드(§4 카테고리: 클러스터 Helm 애드온)로 이월.
+
+### 11-2. 다음 라운드로 이월된 작업
+
+- slash-infra write용 PAT/Deploy key 발급(사용자 액션) + slash-api/nlu/llm 세 저장소 workflow에 tag-bump 스텝 추가
+- dev 환경 실제 apply(상시운영 전환) + ArgoCD/ALB Controller/Karpenter/metrics-server/**ESO** 재설치
+- AWS Budgets 월 $100 한도, GPU EC2(Ollama) stop/start 정책을 상시운영 기준으로 재검토
+- (선택) ArgoCD GitHub webhook 연동 — 이슈 #15

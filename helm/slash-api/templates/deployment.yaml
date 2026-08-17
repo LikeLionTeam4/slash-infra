@@ -23,11 +23,18 @@ spec:
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           ports:
             - containerPort: {{ .Values.service.targetPort }}
-          {{- with .Values.env }}
+          {{- if or .Values.env .Values.envSecrets }}
           env:
-            {{- range $k, $v := . }}
+            {{- range $k, $v := .Values.env }}
             - name: {{ $k }}
               value: {{ $v | quote }}
+            {{- end }}
+            {{- range .Values.envSecrets }}
+            - name: {{ . }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "slash-api.fullname" $ }}-secrets
+                  key: {{ . }}
             {{- end }}
           {{- end }}
           resources:

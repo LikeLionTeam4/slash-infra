@@ -132,7 +132,7 @@ slash-web → slash-api → slash-llm(EKS) → Ollama(EC2, EKS 밖) → 역순 �
 | 자동 백업 | 7일 | |
 | 데이터베이스 | `slash_dev` + `slash_demo` | 인스턴스 1개, DB 2개로 분리 — 별도 인스턴스를 늘리지 않고 환경을 나눔 |
 
-- 자격증명은 Secrets Manager로 관리하고, `slash-api` 파드가 IRSA로 접근 (노드 IAM Role에는 권한을 주지 않음, §4).
+- 자격증명은 Secrets Manager로 관리하고, `slash-api` 파드가 IRSA로 접근 (노드 IAM Role에는 권한을 주지 않음, §4). **접근 메커니즘 결정(2026-08-18, 이슈 #23/#24): External Secrets Operator**가 `slash-api` 자신의 IRSA ServiceAccount 신원으로 Secrets Manager를 읽어 K8s Secret으로 동기화하고, `deployment.yaml`이 `secretKeyRef`로 주입한다 — `modules/eks/slash_api_irsa.tf`, `helm/slash-api/templates/{secretstore,externalsecret}.yaml`, `external-secrets/README.md` 참고. ESO 컨트롤러 자체에는 AWS 권한을 안 준다(계정 전체 시크릿 읽기 권한을 컨트롤러 하나에 몰아주지 않기 위함).
 
 ### 7-2. Valkey (ElastiCache)
 
@@ -152,7 +152,7 @@ slash-web → slash-api → slash-llm(EKS) → Ollama(EC2, EKS 밖) → 역순 �
 ## 9. CI/CD 파이프라인
 
 - GitHub Actions: 각 서비스 저장소(`slash-api`, `slash-nlu`, `slash-llm`)에서 빌드 → 테스트 → ECR push.
-- ArgoCD가 이 저장소의 `helm/` 디렉터리를 보고 EKS에 GitOps 방식으로 배포 — 이미지 태그 업데이트는 PR/커밋으로 반영(위치 결정은 §13 참고). **ArgoCD 설치 + "Git 커밋 → 자동 배포" 흐름 자체는 local 클러스터에서 검증 완료**(2026-08-11) — `argocd/` 디렉터리 참고, Application 3개(`helm/slash-api`·`slash-nlu`·`slash-llm` + `values-local.yaml`) 등록 후 `values-local.yaml` 커밋을 실제로 push해 자동 sync(스케일 업/다운 왕복) 확인, 검증 후 destroy(운영 로그 참고). dev 환경 자체가 미구축이라 상시 운영은 아직([이슈 #10](https://github.com/LikeLionTeam4/slash-infra/issues/10), dev 착수 시 `values-dev.yaml` 기준으로 전환).
+- ArgoCD가 이 저장소의 `helm/` 디렉터리를 보고 EKS에 GitOps 방식으로 배포 — 이미지 태그 업데이트는 PR/커밋으로 반영. **결정(2026-08-18, 이슈 #24): 각 서비스 저장소의 CI(`publish-image` job 다음 단계)가 slash-infra의 `values-dev.yaml`에 직접 커밋·push**한다(ArgoCD Image Updater 대신) — 클러스터에 새 컴포넌트를 추가하지 않고 기존 `sha-` 태그·GitOps 패턴을 그대로 따름. 이 커밋용 PAT/Deploy key는 서비스 저장소의 ECR push용 OIDC Role과 별개로 발급. **ArgoCD 설치 + "Git 커밋 → 자동 배포" 흐름 자체는 local 클러스터에서 검증 완료**(2026-08-11) — `argocd/` 디렉터리 참고, Application 3개(`helm/slash-api`·`slash-nlu`·`slash-llm` + `values-local.yaml`) 등록 후 `values-local.yaml` 커밋을 실제로 push해 자동 sync(스케일 업/다운 왕복) 확인, 검증 후 destroy(운영 로그 참고). dev 환경 자체가 미구축이라 상시 운영은 아직([이슈 #10](https://github.com/LikeLionTeam4/slash-infra/issues/10), dev 착수 시 `values-dev.yaml` 기준으로 전환).
 - Helm chart 구조: `helm/`로 구현 완료(2026-08-11). 서비스별 디렉터리(`helm/slash-api/`, `helm/slash-nlu/`, `helm/slash-llm/`) + 환경별 values 파일(`values-local.yaml`/`values-dev.yaml`/`values-prod.yaml`)로 분리. `values-local.yaml`은 `mock-services/`가 push한 placeholder 이미지로 `helm lint`/`helm template`/`kubectl apply --dry-run=server` 검증까지 마침 — 실제 EKS apply는 검증 후 destroy(§운영 로그).
 - **적용 범위: local 제외, dev부터 이 파이프라인 전체(GitHub Actions + ArgoCD)를 적용한다.** local은 개인이 직접 `terraform apply`/수동 배포하는 실험용이라 CI/CD 자동화가 필요 없다 (§11).
 

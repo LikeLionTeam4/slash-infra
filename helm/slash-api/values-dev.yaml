@@ -3,8 +3,38 @@ image:
   tag: "" # 아직 비워둠 — slash-api에 실제 Dockerfile/CI가 생기면(이슈 #11) 커밋 SHA로 채워짐
 
 serviceAccount:
-  roleArn: "" # slash-api가 RDS/Valkey Secrets Manager에 접근할 IRSA Role — 아직 미생성,
-  # 2026-08-05 local에서 임시 irsa_test.tf로 메커니즘만 검증했고 dev용 상시 Role은 별도 작업 필요
+  roleArn: "" # environments/dev/eks apply 후 output.slash_api_role_arn 값으로 채운다
+  # (2026-08-18, modules/eks/slash_api_irsa.tf 신설 — 이슈 #23/#24)
+
+env:
+  # RDS/Valkey 엔드포인트 자체는 시크릿이 아니라 평문 env로 충분 — 이슈 #23에서 확보한 실측값.
+  DB_URL: "jdbc:postgresql://slash-rds-dev.c3qme6c6e7fj.ap-northeast-2.rds.amazonaws.com:5432/slash_dev"
+  VALKEY_HOST: "master.slash-valkey-dev.2iapp0.apn2.cache.amazonaws.com"
+
+externalSecrets:
+  enabled: true
+  refreshInterval: 1h
+  data:
+    - secretKey: DB_USERNAME
+      remoteRef:
+        key: "rds!db-2d63d5cc-cc90-4ed1-a26e-3d96f4e95097"
+        property: username
+    - secretKey: DB_PASSWORD
+      remoteRef:
+        key: "rds!db-2d63d5cc-cc90-4ed1-a26e-3d96f4e95097"
+        property: password
+    # VALKEY_AUTH_TOKEN: 키 이름은 잠정값 — slash-api 앱이 아직 spring.data.redis.password를
+    # 안 읽는다(이슈 #23 "문제 1", slash-api 팀 앱 코드 변경 대기). 실제 설정 키가 정해지면
+    # 이 secretKey와 아래 envSecrets를 맞춰서 갱신할 것.
+    - secretKey: VALKEY_AUTH_TOKEN
+      remoteRef:
+        key: "slash/valkey/dev"
+        property: auth_token
+
+envSecrets:
+  - DB_USERNAME
+  - DB_PASSWORD
+  - VALKEY_AUTH_TOKEN
 
 ingress:
   # 2026-08-12: image.tag가 비어 있는 동안 ingress.enabled=true였더니, pod가 못 뜨는 것과

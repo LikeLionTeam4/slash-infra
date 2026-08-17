@@ -34,6 +34,24 @@ ingress:
 
 env: {}
 
+externalSecrets:
+  # true면 External Secrets Operator(클러스터에 별도 Helm 설치 필요 — external-secrets/README.md,
+  # ArgoCD 대상 아닌 kube-system 애드온이라 karpenter/alb-controller와 같은 패턴)가 AWS Secrets
+  # Manager 시크릿을 K8s Secret으로 동기화한다. 인증은 serviceAccount.roleArn(IRSA)을 그대로
+  # 재사용 — SecretStore가 이 파드의 ServiceAccount 신원으로 assume한다(이슈 #23/#24).
+  enabled: false
+  refreshInterval: 1h
+  # 항목 하나 = Secrets Manager 시크릿(JSON 가능) 필드 하나 → K8s Secret 키 하나.
+  # secretKey는 아래 envSecrets에서 그대로 참조하므로 이름을 맞춰야 한다.
+  data: []
+  # - secretKey: DB_PASSWORD
+  #   remoteRef:
+  #     key: rds!db-xxxx           # Secrets Manager 시크릿 이름
+  #     property: password         # JSON 필드. 시크릿 전체를 쓰려면 생략
+
+# secretKeyRef로 주입할 env 이름 목록 — externalSecrets.data의 secretKey와 동일해야 한다.
+envSecrets: []
+
 resources:
   requests:
     cpu: 100m

@@ -51,3 +51,9 @@ variable "tags" {
   type        = map(string)
   default     = {}
 }
+
+variable "slash_api_secret_arns" {
+  description = "slash-api IRSA Role에게 읽기 권한을 줄 Secrets Manager ARN 목록(RDS/Valkey). 빈 리스트면 Role 자체를 안 만든다 — local처럼 DB가 없는 환경용"
+  type        = list(string)
+  default     = []
+}

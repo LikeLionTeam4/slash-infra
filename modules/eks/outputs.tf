@@ -38,3 +38,8 @@ output "alb_controller_role_arn" {
   description = "AWS Load Balancer Controller Helm 설치 시 ServiceAccount 애노테이션에 넣을 Role ARN"
   value       = aws_iam_role.alb_controller.arn
 }
+
+output "slash_api_role_arn" {
+  description = "helm/slash-api values-<env>.yaml의 serviceAccount.roleArn에 채울 값 — slash_api_secret_arns가 비어있으면 빈 문자열"
+  value       = length(var.slash_api_secret_arns) > 0 ? aws_iam_role.slash_api[0].arn : ""
+}

@@ -33,3 +33,8 @@ output "alb_controller_role_arn" {
 output "api_certificate_arn" {
   value = aws_acm_certificate.api.arn
 }
+
+output "slash_api_role_arn" {
+  description = "helm/slash-api/values-dev.yaml의 serviceAccount.roleArn에 채울 값"
+  value       = module.eks.slash_api_role_arn
+}

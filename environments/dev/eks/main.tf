@@ -44,6 +44,18 @@ data "terraform_remote_state" "network" {
   }
 }
 
+# slash-api IRSA Role(secrets_arns)용 — database가 eks보다 먼저 apply돼 있어야 한다
+# (기존 순서: network → cognito/database/eks, docs/operations-log.md §5 참고).
+data "terraform_remote_state" "database" {
+  backend = "s3"
+
+  config = {
+    bucket = "slash-tfstate-061039804626"
+    key    = "dev/database.tfstate"
+    region = "ap-northeast-2"
+  }
+}
+
 module "eks" {
   source = "../../../modules/eks"
 
@@ -53,6 +65,11 @@ module "eks" {
   vpc_id                 = data.terraform_remote_state.network.outputs.vpc_id
   private_app_subnet_ids = values(data.terraform_remote_state.network.outputs.private_app_subnet_ids)
   eks_security_group_id  = data.terraform_remote_state.network.outputs.eks_security_group_id
+
+  slash_api_secret_arns = [
+    data.terraform_remote_state.database.outputs.rds_master_user_secret_arn,
+    data.terraform_remote_state.database.outputs.valkey_secret_arn,
+  ]
 
   # ECR은 이제 modules/eks에 없다(2026-08-12, environments/bootstrap의 modules/ecr로 이전
   # — docs §6). local/eks 마이그레이션 때와 동일하게, dev/eks도 ECR을 만들지 않는다 —
