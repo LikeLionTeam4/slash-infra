@@ -25,6 +25,16 @@ service:
 
 env: {}
 
+# /health(liveness)와 /ready(readiness, Ollama 연결+모델 확인)가 분리돼 있다
+# (LikeLionTeam4/slash-llm#5, 이슈 #25). /ready는 앱 내부적으로 LLM_READY_TIMEOUT
+# (기본 2초) 안에 Ollama를 확인하는데, K8s httpGet probe의 기본 timeoutSeconds(1초)로는
+# 그 안에 안 끝날 수 있어 넉넉히 잡는다.
+probes:
+  initialDelaySeconds: 10
+  periodSeconds: 10
+  failureThreshold: 3
+  timeoutSeconds: 3
+
 nodeSelector: {}
 tolerations: []
 
