@@ -33,11 +33,12 @@ Apply는 이 표의 순서대로, **Destroy는 반대 순서**로 진행한다. 
 | `environments/local/frontend` | 12 | `site_url = https://local.sbsh.cloud`, `bucket_name = slash-web-local-061039804626`, `frontend_deploy_role_arn = arn:aws:iam::061039804626:role/slash-frontend-deploy-local` | 적용됨, 콘텐츠까지 배포됨. GitHub OIDC 배포 Role(`modules/frontend-cicd`) 적용 |
 | `environments/local/cognito` | 3 | `user_pool_id = ap-northeast-2_pb5emFWag`, `user_pool_client_id = cn58fb2l2vej46fafkmb7au9j`, `issuer_url = https://cognito-idp.ap-northeast-2.amazonaws.com/ap-northeast-2_pb5emFWag`, `hosted_domain = https://slash-local-061039804626.auth.ap-northeast-2.amazoncognito.com` | 적용됨, 상시 유지. Managed Login(v2) + 이메일·비밀번호. slash-web/slash-api가 이 값들을 직접 참조하므로 destroy 금지 |
 | `environments/local/eks` | 0 | – | 미적용 — ECR도 bootstrap으로 이전돼서 이제 아무것도 안 남음. 클러스터 재현 이력은 §3/§7 참고 |
-| `environments/dev/network` | 40 | `vpc_id = vpc-0d91701be83265d29`, NAT 2개(AZ당 1개) | 적용됨(2026-08-13 재구축, §3) |
-| `environments/dev/cognito` | 4 | `user_pool_id = ap-northeast-2_lkECR5t9u` | 적용됨(2026-08-13) |
-| `environments/dev/database` | 7 | `rds_endpoint = slash-rds-dev.c3qme6c6e7fj.ap-northeast-2.rds.amazonaws.com:5432`, `valkey_endpoint = master.slash-valkey-dev.2iapp0.apn2.cache.amazonaws.com` | 적용됨(2026-08-13), RDS Multi-AZ |
-| `environments/dev/eks` | 21 | `cluster_name = slash-eks-dev`, `api_certificate_arn`(ACM, ISSUED) | 적용됨(2026-08-13). ArgoCD + ALB Controller까지 Helm 설치 완료, `argocd/applications-dev/` 3개 Synced |
-| `environments/dev/observability` | 3 | `sns_topic_arn = arn:aws:sns:ap-northeast-2:061039804626:slash-alarms-dev` | 적용됨(2026-08-13) |
+| `environments/dev/network` | 43 | `vpc_id = vpc-0cc23d990ea9b2ba9`, NAT 2개(AZ당 1개) | 적용됨(**2026-08-18 상시운영 전환 재구축**, §11-2). 이전엔 라운드마다 destroy했지만 이제 destroy 예정 없음 |
+| `environments/dev/cognito` | 4 | `user_pool_id = ap-northeast-2_kiW46VZ9O` | 적용됨, 상시 유지(2026-08-18) |
+| `environments/dev/database` | 8 | `rds_endpoint = slash-rds-dev.c3qme6c6e7fj.ap-northeast-2.rds.amazonaws.com:5432`, `valkey_endpoint = master.slash-valkey-dev.2iapp0.apn2.cache.amazonaws.com` | 적용됨(2026-08-18), RDS Multi-AZ. **주의**: 시크릿 이름(`rds!db-*`, `slash/valkey/dev`)은 재apply마다 바뀔 수 있음(§11-2 트러블슈팅) — 상시운영이면 더 이상 안 바뀔 것 |
+| `environments/dev/eks` | 21 | `cluster_name = slash-eks-dev`, `api_certificate_arn`(ACM, ISSUED), `slash_api_role_arn = arn:aws:iam::061039804626:role/slash-slash-api-dev` | 적용됨(2026-08-18). ArgoCD/ALB Controller/Karpenter 1.10.0/metrics-server/**External Secrets Operator** 전부 Helm 설치 완료, `argocd/applications-dev/` 3개 Synced(slash-nlu/llm Healthy, slash-api는 image.tag 대기 중) |
+| `environments/dev/observability` | 3 | `sns_topic_arn = arn:aws:sns:ap-northeast-2:061039804626:slash-alarms-dev` | 적용됨(2026-08-18) |
+| `environments/dev/llm-runtime` | 4 | `ollama_private_ip = 10.8.10.40` | 적용됨(2026-08-18), gemma3:4b 로드 완료·`slash-llm` 파드에서 실제 추론 왕복 확인 |
 | `environments/prod/*` | – | – | 미구축 |
 
 계정은 `061039804626`(부트캠프 공유, 2026-08-13 재발급 — 옛 계정 `727646470302`는 더 이상 접근 불가). 리전 `ap-northeast-2`. 이 표는 스냅샷이라 실제 값이 궁금하면 각 디렉터리에서 `terraform output`으로 재확인할 것 — 아래는 마지막 갱신 시점(2026-08-13) 기준.
@@ -528,7 +529,7 @@ K8s부터 정리(ArgoCD Application 3개 삭제 → `deployment,hpa,service,serv
 
 최종 확인은 지난 라운드 교훈대로 `resourcegroupstaggingapi`(캐시 지연 있음) 대신 `describe-vpcs`/`describe-nat-gateways`/`describe-db-instances`/`describe-user-pool`/`describe-replication-groups`/`describe-instances`로 직접 확인 — 전부 빈 결과 또는 `NotFound`로 실제 삭제 확인. 6개 `environments/dev/*` 모두 `terraform state list` 0개.
 
-## 11. dev 상시 운영 전환 준비 — CD 자동화 (2026-08-18)
+## 11. dev 상시 운영 전환 — CD 자동화 (2026-08-18)
 
 **결정(2026-08-18, [이슈 #24](https://github.com/LikeLionTeam4/slash-infra/issues/24)):** 지금까지 dev는 라운드마다 apply→검증→destroy를 반복하는 테스트베드였다(§7~§10). 오늘부터 팀원이 서비스 저장소의 `dev` 브랜치에 머지하면 dev 환경에 자동 반영되도록 전환한다 — 이게 의미가 있으려면 dev가 상시로 떠 있어야 하므로, apply→destroy 반복 패턴에서 **상시 운영**으로 전환한다. 이미지 태그 자동반영 방식은 (ArgoCD Image Updater 대신) **서비스 저장소 CI가 slash-infra에 직접 커밋**하는 쪽으로 결정 — 기존 `sha-` 태그·GitOps 패턴과 가장 잘 맞음.
 
@@ -545,9 +546,20 @@ K8s부터 정리(ArgoCD Application 3개 삭제 → `deployment,hpa,service,serv
 - `serviceAccount.roleArn`은 여전히 빈 값 — `environments/dev/eks` apply 후 신규 output `slash_api_role_arn`으로 채워야 함(다음 라운드).
 - `helm lint`/`helm template`(기본값·`values-dev.yaml` 둘 다), `terraform validate`(`modules/eks`, `environments/dev/eks`, `-backend=false`)로 검증 완료. 실제 AWS apply·ESO 동작 검증은 다음 라운드(§4 카테고리: 클러스터 Helm 애드온)로 이월.
 
-### 11-2. 다음 라운드로 이월된 작업
+### 11-2. dev 환경 실제 apply — 상시운영 전환 (2026-08-18)
 
-- slash-infra write용 PAT/Deploy key 발급(사용자 액션) + slash-api/nlu/llm 세 저장소 workflow에 tag-bump 스텝 추가
-- dev 환경 실제 apply(상시운영 전환) + ArgoCD/ALB Controller/Karpenter/metrics-server/**ESO** 재설치
-- AWS Budgets 월 $100 한도, GPU EC2(Ollama) stop/start 정책을 상시운영 기준으로 재검토
+같은 날 코드 준비(§11-1) 직후 실제로 apply했다. 이번엔 destroy를 예정하지 않는 **상시 운영** 전환이라 §5 절차는 적용 대상이 아니다.
+
+- Terraform: `network`(43)→`cognito`(4)→`database`(RDS+Valkey, 13m29s)→`eks`(21, slash-api IRSA 포함)→`observability`(3)→`llm-runtime`(4, GPU EC2) 순서로 apply. 전부 "N added, 0 changed, 0 destroyed"로 클린 apply.
+  - **트러블슈팅**: `database` apply 중 Valkey Secrets Manager 시크릿(`slash/valkey/dev`) 생성이 `InvalidRequestException: already scheduled for deletion`으로 실패 — 8/13 destroy 때 지운 시크릿이 기본 복구 대기 기간(30일) 안에 있어서 같은 이름으로 재생성이 막힘. 사용자 확인 후 `aws secretsmanager delete-secret --force-delete-without-recovery`로 영구 삭제 후 재시도해 해결. **교훈**: dev를 라운드마다 destroy하던 습관 때문에 시크릿 이름이 겹치는 재apply에서 반복될 수 있는 문제 — 상시운영으로 전환했으니 앞으로는 덜 겪겠지만, 혹시 다시 destroy→재apply하게 되면 미리 염두에 둘 것.
+  - `network`/`eks`가 새로 만들어지며 subnet ID·SG ID·ACM ARN·RDS 마스터 시크릿 이름·Ollama EC2 사설 IP가 전부 바뀜 — `helm/slash-api/values-dev.yaml`(IRSA roleArn, RDS 시크릿 키, ACM ARN), `helm/slash-llm/values-dev.yaml`(OLLAMA_URL), `karpenter/dev/nodepool.yaml`(subnet/SG selector)을 실제 apply 후 output 값으로 갱신·커밋·push.
+- 클러스터 Helm 애드온: ArgoCD(`argocd/README.md`) → ALB Controller → Karpenter 1.10.0(K8s 1.36 호환, `karpenter/README.md`) → metrics-server → **External Secrets Operator**(`external-secrets/README.md`, 신규) 순서로 전부 수동 설치, 전부 정상 기동 확인.
+- `argocd/applications-dev/` 3개 apply → 전부 `Synced`. `slash-nlu`/`slash-llm`은 기존 이미지 태그가 남아있어 바로 `Healthy`, `slash-api`는 `image.tag`가 비어 있어 예상대로 `InvalidImageName`(이슈 #11/#23 — CI 워크플로 대기 중).
+- **엔드투엔드 검증**: `slash-llm` 파드 → Ollama EC2(새 IP) → 실제 Gemma3 요약 응답 확인(첫 요청은 콜드스타트로 30초 넘게 걸려 타임아웃 났다가 90초로 재시도해 성공 — 이후 요청은 더 빠를 것으로 예상). `slash-nlu` 파드 → `/internal/v1/nlu/analyze` 실제 요청도 정상 응답.
+- **ESO 왕복 검증**(이슈 #23/#24 핵심 목표): `slash-api`의 ServiceAccount에 IRSA annotation이 붙은 뒤 `SecretStore`가 `Valid`로 전환 → `ExternalSecret`이 `SecretSynced`로 전환 → `slash-api-secrets` K8s Secret에 `DB_USERNAME`/`DB_PASSWORD`/`VALKEY_AUTH_TOKEN` 키 생성까지 확인(값은 확인하지 않음, 존재만 확인). **처음엔 ArgoCD가 로컬에서 값만 바꾼 values-dev.yaml을 못 봐서(git push 전) IRSA annotation이 안 붙어 `InvalidProviderConfig`로 실패했다** — git push 후 `kubectl patch application ... argocd.argoproj.io/refresh=hard`로 강제 refresh, ExternalSecret은 `force-sync` 어노테이션으로 강제 재동기화해 확인. **교훈**: ArgoCD는 로컬 파일이 아니라 git 원격을 본다 — 로컬에서 값만 바꾸고 push를 깜빡하면 "적용됐는데 왜 안 되지" 착각하기 쉽다.
+
+### 11-3. 다음 라운드로 이월된 작업
+
+- slash-infra write용 PAT/Deploy key 발급(사용자 액션) + slash-api/nlu/llm 세 저장소 workflow에 tag-bump 스텝 추가(이슈 #11 CI 완료되면 slash-api도 이 경로로 배포됨)
+- AWS Budgets 월 $100 한도, GPU EC2(Ollama) stop/start 정책을 상시운영 기준으로 재검토 — **다음에 사용자와 비용 예측 같이 하기로 함**
 - (선택) ArgoCD GitHub webhook 연동 — 이슈 #15
