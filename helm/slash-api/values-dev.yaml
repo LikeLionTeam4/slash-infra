@@ -7,9 +7,21 @@ serviceAccount:
   roleArn: "arn:aws:iam::061039804626:role/slash-slash-api-dev"
 
 env:
+  # 2026-08-18: 첫 실배포 시도에서 발견 — SPRING_PROFILES_ACTIVE가 없으면
+  # application.yml의 spring.profiles.default=local로 떨어져서 DB_URL 등을 전부
+  # 무시하고 localhost로 접속을 시도한다(Connection to localhost:5432 refused).
+  # application-dev.yml이 DB_URL/VALKEY_HOST를 실제로 매핑하는 프로필이라 반드시 필요.
+  SPRING_PROFILES_ACTIVE: "dev"
   # RDS/Valkey 엔드포인트 자체는 시크릿이 아니라 평문 env로 충분 — 이슈 #23에서 확보한 실측값.
   DB_URL: "jdbc:postgresql://slash-rds-dev.c3qme6c6e7fj.ap-northeast-2.rds.amazonaws.com:5432/slash_dev"
   VALKEY_HOST: "master.slash-valkey-dev.2iapp0.apn2.cache.amazonaws.com"
+  # Cognito 값은 공개 클라이언트가 쓰는 값이라 시크릿이 아님(slash-web CI도 Variables로 취급,
+  # docs/aws-architecture.md §9-2 참고). environments/dev/cognito output(2026-08-18 apply).
+  COGNITO_ISSUER_URI: "https://cognito-idp.ap-northeast-2.amazonaws.com/ap-northeast-2_kiW46VZ9O"
+  COGNITO_CLIENT_ID: "4pjdb0cuqt991vpclf1b8ai91e"
+  COGNITO_USER_INFO_URI: "https://slash-dev-061039804626.auth.ap-northeast-2.amazoncognito.com/oauth2/userInfo"
+  # slash-nlu 서비스로 클러스터 내부 짧은 주소 사용 (application.yml 주석, 같은 namespace)
+  NLU_BASE_URL: "http://slash-nlu"
 
 externalSecrets:
   enabled: true
