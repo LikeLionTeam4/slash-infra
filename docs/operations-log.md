@@ -614,3 +614,10 @@ dev가 상시운영으로 전환되며 `local/network`(모듈 검증용 기반�
 - infra 후속 작업을 [이슈 #35](https://github.com/LikeLionTeam4/slash-infra/issues/35)로 생성 — `helm/slash-nlu/templates/deployment.yaml`의 `readinessProbe.httpGet.path`를 `/health` → `/ready`로 변경(`livenessProbe`는 `/health` 유지).
 - **블로킹 조건**: `values-dev.yaml`의 `image.tag`가 특정 sha(`sha-d46fa8b81866a0d7f738154591b109dd914583cc`)로 고정돼 있어, PR #7이 merge되어 새 이미지가 빌드되기 전에는 readinessProbe만 먼저 바꿀 수 없다 — 바꾸면 현재 이미지에 없는 `/ready`를 찾다 404로 readiness가 계속 실패한다. 이번엔 §11-4의 slash-llm(PR #27, `/ready` merge 확인 후 연결)과 같은 순서를 그대로 따른 것.
 - PR #7에 이슈 #35 링크와 "merge되면 알려달라"는 코멘트만 남기고 대기 — merge 확인 후 probe 변경·`image.tag` 갱신·`helm lint`/`helm template` 검증·dev 배포까지 진행 예정(§11-4와 동일 절차).
+
+**같은 날 이어서 완료**: PR #7이 곧바로 merge됐고(`0b40ee36dfcb`), CD 봇이 `values-dev.yaml`의 `image.tag`를 새 sha로 자동 갱신 — 블로킹 조건이 풀려 나머지 작업을 이어서 진행했다.
+
+- `deployment.yaml`의 `readinessProbe.httpGet.path`를 `/health` → `/ready`로 변경, `helm lint`·`helm template`(기본값/dev/local/prod 전부) 검증 통과 후 커밋·push.
+- ArgoCD 기본 폴링 주기(§11-6에서 60s로 단축)를 기다리지 않고 `kubectl patch application slash-nlu -n argocd --type merge -p '{"metadata":{"annotations":{"argocd.argoproj.io/refresh":"hard"}}}'`로 즉시 반영 확인.
+- **검증**: 롤아웃 완료(`kubectl rollout status` 성공) 후 파드 스펙에서 `readinessProbe=/ready`, `livenessProbe=/health` 확인, 파드 안에서 직접 `GET /ready` 호출해 `200 {"status":"UP","analyzerReady":true}` 응답 확인.
+- PR #7에 dev 배포 완료 코멘트 작성, 팀원에게 공유.
