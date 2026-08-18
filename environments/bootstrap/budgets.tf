@@ -3,14 +3,17 @@
 # 원인이든 계정 전체 월 지출이 예산을 넘으면 알려준다. 계정 공용 자원이라 ECR/CI Role과
 # 같은 이유로 bootstrap이 소유한다(§6, §9-3).
 #
-# 임계값(월 $100)은 확정치가 아니라 시작값 — local/dev를 apply→destroy로 짧게 돌리는
-# 지금 사용 패턴 기준의 안전망이다. dev가 상시 운영으로 바뀌거나 prod가 생기면
-# 실측 지출 보고 조정할 것.
+# 임계값 갱신(2026-08-18, 이슈 5): dev 상시운영 전환 후 사용자와 함께 실측 스펙 기준
+# 재산정 — EKS/RDS(Multi-AZ)/Valkey/NAT 2개 baseline이 이미 월 ~$380~390, 여기에
+# Ollama GPU EC2(Spot+평일 09~21시 스케줄, modules/llm-runtime/schedule.tf)를 더하면
+# 월 ~$440~475로 추정된다. 예전 $100은 local/dev를 apply→destroy로 짧게 돌리던
+# 시절 기준값이라 상시운영 baseline만으로도 이미 초과 — $500으로 상향, 변동비(NAT
+# 데이터 처리, 다른 팀원의 local 실험 등) 여유를 감안했다. prod가 생기면 다시 재산정.
 
 resource "aws_budgets_budget" "monthly_cost" {
   name         = "slash-monthly-cost"
   budget_type  = "COST"
-  limit_amount = "100"
+  limit_amount = "500"
   limit_unit   = "USD"
   time_unit    = "MONTHLY"
 
