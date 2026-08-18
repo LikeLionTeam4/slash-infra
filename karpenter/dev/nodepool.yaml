@@ -13,10 +13,10 @@ spec:
     - alias: al2023@latest
   role: slash-eks-node-dev
   subnetSelectorTerms:
-    - id: subnet-024b340160b278a29 # ap-northeast-2a private-app
-    - id: subnet-08e0afda6b2b5723b # ap-northeast-2c private-app
+    - id: subnet-04ccf83a324359d34 # ap-northeast-2a private-app
+    - id: subnet-017517ba0205ba706 # ap-northeast-2c private-app
   securityGroupSelectorTerms:
-    - id: sg-09b8ff6f748976952 # dev EKS 보안그룹
+    - id: sg-0120d7f840a51f438 # dev EKS 보안그룹
   tags:
     Project: slash
     Service: eks

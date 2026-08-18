@@ -3,8 +3,8 @@ image:
   tag: "" # 아직 비워둠 — slash-api에 실제 Dockerfile/CI가 생기면(이슈 #11) 커밋 SHA로 채워짐
 
 serviceAccount:
-  roleArn: "" # environments/dev/eks apply 후 output.slash_api_role_arn 값으로 채운다
-  # (2026-08-18, modules/eks/slash_api_irsa.tf 신설 — 이슈 #23/#24)
+  # 2026-08-18 environments/dev/eks apply로 채움 (modules/eks/slash_api_irsa.tf, 이슈 #23/#24)
+  roleArn: "arn:aws:iam::061039804626:role/slash-slash-api-dev"
 
 env:
   # RDS/Valkey 엔드포인트 자체는 시크릿이 아니라 평문 env로 충분 — 이슈 #23에서 확보한 실측값.
@@ -17,11 +17,11 @@ externalSecrets:
   data:
     - secretKey: DB_USERNAME
       remoteRef:
-        key: "rds!db-2d63d5cc-cc90-4ed1-a26e-3d96f4e95097"
+        key: "rds!db-11d47fea-b814-4bd7-a983-004c0df424b3"
         property: username
     - secretKey: DB_PASSWORD
       remoteRef:
-        key: "rds!db-2d63d5cc-cc90-4ed1-a26e-3d96f4e95097"
+        key: "rds!db-11d47fea-b814-4bd7-a983-004c0df424b3"
         property: password
     # VALKEY_AUTH_TOKEN: 키 이름은 잠정값 — slash-api 앱이 아직 spring.data.redis.password를
     # 안 읽는다(이슈 #23 "문제 1", slash-api 팀 앱 코드 변경 대기). 실제 설정 키가 정해지면
@@ -45,10 +45,10 @@ ingress:
   enabled: false
   host: api.dev.sbsh.cloud
   annotations:
-    # ACM 인증서는 이미 발급 완료(2026-08-13, 계정 재발급 후 environments/dev/eks/domain.tf
-    # 재apply로 새로 발급된 값, ISSUED) — ingress 다시 켤 때 그대로 재사용하면 됨. Route53
-    # A레코드 연결은 그 시점에 마저 진행.
-    alb.ingress.kubernetes.io/certificate-arn: arn:aws:acm:ap-northeast-2:061039804626:certificate/dae5ed19-5c5d-49e2-9e38-e61df80da39b
+    # ACM 인증서는 dev/eks apply마다 새로 발급된다(도메인 검증 필요, ISSUED 확인은 apply 후
+    # `aws acm describe-certificate`로). 2026-08-18 재apply로 새 ARN — ingress 다시 켤 때
+    # 그대로 재사용하면 됨. Route53 A레코드 연결은 그 시점에 마저 진행.
+    alb.ingress.kubernetes.io/certificate-arn: arn:aws:acm:ap-northeast-2:061039804626:certificate/a3aefb70-9621-4e0b-b044-758bf91e943d
     alb.ingress.kubernetes.io/listen-ports: '[{"HTTPS":443}, {"HTTP":80}]'
 
 replicaCount: 2
