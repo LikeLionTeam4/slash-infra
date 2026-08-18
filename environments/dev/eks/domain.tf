@@ -37,3 +37,20 @@ resource "aws_acm_certificate_validation" "api" {
   certificate_arn         = aws_acm_certificate.api.arn
   validation_record_fqdns = [for record in aws_route53_record.api_cert_validation : record.fqdn]
 }
+
+# api.dev.sbsh.cloud → ALB alias 레코드.
+#
+# ALB Controller가 만든 ALB는 Terraform이 모르는 리소스라(docs/aws-architecture.md
+# §4 트러블슈팅과 같은 제약) DNS/zone_id를 정적 값으로 직접 쓴다 — 위 zone_id와 같은
+# 이유. slash-api Ingress를 지웠다 다시 만들면(ALB 재생성) 이 값도 같이 갱신해야 한다.
+resource "aws_route53_record" "api" {
+  zone_id = local.route53_zone_id
+  name    = "api.dev.sbsh.cloud"
+  type    = "A"
+
+  alias {
+    name                   = "k8s-default-slashapi-da025791f3-1049595990.ap-northeast-2.elb.amazonaws.com"
+    zone_id                = "ZWKZPGTI48KDX" # ALB(ap-northeast-2) canonical hosted zone ID — 리전 고정값
+    evaluate_target_health = true
+  }
+}
