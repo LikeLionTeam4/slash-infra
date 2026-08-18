@@ -142,6 +142,28 @@ slash-web → slash-api → slash-llm(EKS) → Ollama(EC2, EKS 밖) → 역순 �
 - AUTH 토큰은 RDS처럼 자동 관리 기능이 없어서 `random_password`로 직접 생성해 Secrets Manager에 저장(엔드포인트·포트와 함께).
 - 초기 규모는 시연 부하 기준 최소 노드 타입(`cache.t4g.micro`)으로 시작 — 정확한 사이징은 실사용 트래픽 확인 후 조정 (§13 TODO).
 
+### 7-3. RAG 시맨틱 검색 용량 계획 (pgvector, 착수 전 검토)
+
+`slash-api`가 로컬 파일 시맨틱 검색(RAG)을 이 RDS 인스턴스 위에 pgvector로 얹을 계획이다(별도 벡터DB 도입 없음 — `search_documents`/`search_chunks` 스키마는 `slash-api` 쪽 결정사항). 착수 전 인프라 관점에서 미리 확인·계산해 둔 내용.
+
+**확인(2026-08-18): 확장 활성화에 파라미터 그룹 변경 불필요.** `pgvector`는 RDS 허용 확장 목록에 기본 포함돼 있어 `CREATE EXTENSION IF NOT EXISTS vector;`만으로 켜진다 — `pg_cron`/`pglogical`처럼 `shared_preload_libraries`를 건드리는 커스텀 파라미터 그룹이 필요한 확장이 아니다. 조건은 PostgreSQL 16.3 이상뿐인데, `engine_version = "16"`으로 마이너 버전을 고정하지 않고 있어(§7-1 표) RDS가 내려주는 최신 16.x를 쓰는 한 문제없다 — apply 전 실제 인스턴스 마이너 버전만 한 번 확인.
+
+**스토리지 재계산.** 청크당 저장량은 벡터(768차원 float4, 3072B) + 미리보기(최대 300B) + 로우 오버헤드 ≈ 3.5KB, 여기에 HNSW 인덱스가 벡터 컬럼 자체를 1.5~2배 추가로 잡아먹으므로 청크당 실효 디스크 사용량은 **5~6KB**로 잡는다.
+
+| 시나리오 | 사용자당 파일 수 | 파일당 평균 청크 수 | 사용자당 청크 | 사용자당 디스크 |
+| --- | --- | --- | --- | --- |
+| 소규모 | 500 | 5 | 2,500 | ~13~15MB |
+| 중간 | 2,000 | 5 | 10,000 | ~50~60MB |
+
+지금 `rds_max_allocated_storage` 상한(100GB, §7-1)이면 "중간" 시나리오 기준 대략 **1,700~2,000명분** 여유가 있다는 뜻 — 지금 당장 상한을 올릴 필요는 없지만, 등록 사용자 수를 지표로 추적해서 그 규모에 가까워지면 상한을 미리 올려야 한다. `tasks`/`task_events` 등 기존 테이블 용량은 이 계산 대비 무시할 만큼 작다고 가정.
+
+**인스턴스 클래스 재검토 필요 (미결정).** 지금 `db.t4g.small`(Graviton, 2GB RAM, 버스터블)은 §7-1 표에 "시연 규모 부하에 충분"이라 명시된 대로 데모 기준 사이징이다. HNSW 인덱스 빌드는 `maintenance_work_mem` 등 메모리를 크게 쓰고, 임베딩 upsert가 몰리는 색인 배치는 버스터블 인스턴스의 CPU 크레딧을 소진시킬 수 있다 — 크레딧이 바닥나면 알람과 무관하게 CPU가 스로틀링돼 응답이 느려진다. **권장: RAG 색인 파이프라인이 실제로 붙기 전에는 인스턴스 클래스를 미리 올리지 않는다.** dev에서 실측 색인 부하(파일 수백~수천 개 배치 색인 시 CPU/메모리/`CPUCreditBalance` 추이)를 먼저 관찰한 뒤, 필요하면 non-burstable 계열(`db.r6g`/`db.m6g`)로 전환을 결정한다 — 실측 없이 미리 올리는 건 §12 예산 원칙(비용 최소화보다 가용성 우선이지만, 추측성 증액은 다른 얘기)과도 안 맞는다.
+
+**CloudWatch 알람 재점검 권장 방식(2026-08-18).** 지금 `rds_cpu_threshold_percent`(80%, 15분 지속)·`rds_free_storage_threshold_bytes`(2GB, §10)는 색인 워크로드를 감안하지 않은 값이라 숫자를 추측으로 바꾸지 않고 아래 순서를 권장한다:
+1. `CPUCreditBalance` 알람(버스터블 인스턴스 전용 메트릭, `LessThanThreshold`)을 `modules/observability`에 새로 추가한다 — 위 인스턴스 클래스 리스크에 대한 직접적인 조기 경보. 기존 `CPUUtilization` 알람만으로는 크레딧 소진발 스로틀링을 못 잡는다.
+2. 기존 `CPUUtilization`/`FreeStorageSpace` 임계치는 지금 바꾸지 않는다 — dev에서 색인 파이프라인을 한 번 실제로 돌려본 뒤(Performance Insights로 실측 피크 CPU·지속시간 확인) 관측된 정상 피크보다 여유 있게 새 값을 정한다.
+3. `rds_free_storage_threshold_bytes`는 위 스토리지 재계산 결과와 연동해서 "다음 오토스케일링 단계 전에 미리 알림" 되는 값으로 갱신한다.
+
 ## 8. 인그레스 & 도메인
 
 - AWS Load Balancer Controller로 ALB Ingress 구성, API 도메인(`api.dev.sbsh.cloud`, prod는 `api.sbsh.cloud`)에 대해 ACM 인증서(`ap-northeast-2`) 발급.
@@ -173,7 +195,7 @@ slash-web → slash-api → slash-llm(EKS) → Ollama(EC2, EKS 밖) → 역순 �
 - 플로우: GitHub Actions에서 `npm run build` → OIDC로 임시 자격증명 획득 → `aws s3 sync`(`--delete`, `index.html` 제외하고 1년 캐시) → `index.html`만 별도로 `no-cache`로 업로드 → `cloudfront create-invalidation --paths "/index.html"`.
 - **`index.html`을 마지막에, 별도로 올리는 이유**: Vite 빌드는 JS/CSS 파일명에 콘텐츠 해시가 붙어서 오래 캐시해도 안전하지만, `index.html`은 해시가 안 붙고 그 안에서 새 해시 파일들을 참조한다. 자산보다 `index.html`이 먼저 올라가면 아직 안 올라간 해시 파일을 참조하는 순간이 생겨 배포 중 404가 날 수 있다.
 - IAM Role은 §9-1의 공유 OIDC provider를 참조하되, **백엔드용과는 별도**로 환경마다 하나씩(`slash-frontend-deploy-<env>`) 만든다 — 권한은 해당 환경의 버킷(`s3:PutObject/DeleteObject/ListBucket`)과 해당 CloudFront 배포(`cloudfront:CreateInvalidation`)로 한정, ECR 권한은 없음.
-- **적용 범위: local부터 검증한다 (§9의 "local 제외, dev부터"와 다름).** §9의 "local 제외" 규정은 GitHub Actions+ArgoCD로 명시된 백엔드 GitOps 파이프라인 얘기고, 프론트엔드는 이미 떠 있는 `local/frontend`(EKS/DB처럼 매번 apply/destroy할 필요 없음)에 Role만 추가하면 되니 비용·시간 부담 없이 local에서 먼저 배선을 검증하고 dev/prod엔 버킷/배포 ID만 바꿔 재사용한다.
+- **적용 범위: 원래 local부터 검증했다 (§9의 "local 제외, dev부터"와 다름).** §9의 "local 제외" 규정은 GitHub Actions+ArgoCD로 명시된 백엔드 GitOps 파이프라인 얘기고, 프론트엔드는 EKS/DB처럼 매번 apply/destroy할 필요 없어 비용·시간 부담 없이 local에서 먼저 배선을 검증했다. **2026-08-18: `local/frontend`는 dev.sbsh.cloud 착수(§9-3, 이슈 #31) 후 역할이 완전히 겹쳐 destroy됨** — 배선 검증 목적은 이미 달성됐고, 지금은 `environments/dev/frontend`가 이 패턴의 실사용처.
 - **trust policy의 저장소 조건은 `StringEquals`가 아니라 `StringLike`+와일드카드를 쓴다.** `LikeLionTeam4` 조직은 GitHub OIDC의 "immutable IDs"가 켜져 있어서 실제 `sub` 클레임이 `repo:LikeLionTeam4/slash-web:ref:...`가 아니라 `repo:LikeLionTeam4@305683394/slash-web@1315812460:ref:...`처럼 조직·저장소명 뒤에 불변 숫자 ID가 붙어 나온다(2026-08-05 CloudTrail로 확인, `docs/operations-log.md` §4 참고). 숫자 ID를 하드코딩하는 대신 이름 뒤에 와일드카드(`repo:<org>*/<repo>*:ref:refs/heads/<branch>`)를 둬서 ID 유무와 무관하게 매칭한다.
 - **현재 타겟 브랜치는 `dev`, 원래 의도는 `main`이었다.** `slash-web`의 `main`은 아직 `README.md`뿐인 빈 스텁 브랜치라(첫 시도 때 `npm ci`가 빌드할 앱 자체가 없어서 실패) 실제 개발이 이뤄지는 `dev`를 임시로 타겟팅했다. 팀이 `dev`→`main` 첫 정식 릴리스를 하면 `modules/frontend-cicd` 호출부(`environments/local/frontend`)의 `github_branch`와 `slash-web`의 워크플로 트리거를 `main`으로 되돌려야 한다(코드에 TODO로 남겨둠).
 - 워크플로 파일은 `slash-web` 저장소에 있다(`slash-infra`가 아님) — `.github/workflows/deploy-local.yml`.
@@ -185,7 +207,7 @@ slash-web → slash-api → slash-llm(EKS) → Ollama(EC2, EKS 밖) → 역순 �
 - `slash-api`/`slash-nlu`/`slash-llm` 세 저장소의 `main` 브랜치에 `required_linear_history`(선형 히스토리 강제, `allow_force_pushes`/`allow_deletions`도 함께 비활성) 브랜치 보호 규칙 적용 완료(2026-08-12, GitHub 저장소 설정 — Terraform 관리 대상 아님). 목적: `dev`에서 이미 검증된 이미지(`sha-` 커밋 태그, IMMUTABLE, §6)를 머지 커밋으로 SHA를 바꾸지 않고 그대로 prod로 승격하기 위함 — PR 머지는 Squash/Rebase만 가능해짐(일반 Merge commit 방식 차단).
 - `production` Environment(필수 리뷰어)는 저장소 설정에서 생성하는 것으로, 실제 배포 워크플로 자체는 [이슈 #11](https://github.com/LikeLionTeam4/slash-infra/issues/11)(각 서비스 실제 Dockerfile 대기)이 풀려야 착수 가능 — 지금은 자리만 마련해둔 상태.
 - 지금은 세 저장소 다 `main`이 `dev`보다 9~35개 커밋 뒤처진 사실상 미사용 브랜치라 이 변경이 팀 작업에 즉시 영향을 주진 않는다. 첫 `dev→main` 릴리스 시점에 팀 공지가 필요 — [이슈 #18](https://github.com/LikeLionTeam4/slash-infra/issues/18)에서 추적.
-- `environments/dev/frontend`(→ `dev.sbsh.cloud`) 착수는 보류 — 백엔드 dev가 실제로 QA 가능해지고 프론트가 dev API를 호출할 필요가 생기는 시점에 팀 합의 후 진행(§9-2의 `local/frontend`와는 별개).
+- ~~`environments/dev/frontend`(→ `dev.sbsh.cloud`) 착수는 보류~~ → **착수 완료(2026-08-18, 이슈 #31)** — 백엔드 dev QA 가능 조건이 충족돼 바로 진행. `slash-api` Ingress 활성화 + DNS 연결, slash-web `deploy-dev.yml` merge, 브라우저로 로그인까지 왕복 확인. `docs/operations-log.md` §11-7 참고.
 
 ## 10. 옵저버빌리티 (CloudWatch / CloudTrail)
 
@@ -206,7 +228,7 @@ local/dev/prod 3단계로 나눈다. **결정(2026-08-12): 팀 전체가 계정 
 
 | 환경 | 역할 | 스펙 | 계정 | 상태 |
 | --- | --- | --- | --- | --- |
-| **local** | 개인 맥북에서 `terraform apply`하는 실험용 — 모듈 변경을 실제 AWS에서 검증 | 최소 구성 (`environments/local/*` 그대로) | **이 계정(`727646470302`)을 팀 전체가 공유**(2026-08-12 확정) — `slash-local` AWS CLI 프로필도 같은 계정을 가리킴. ECR처럼 계정 전체가 공유하는 자원은 `environments/bootstrap`으로 소유권을 모아 환경 간 충돌을 막는다(§6) | `network`/`frontend`/`eks`(검증용, apply→destroy 반복) 구축, RDS는 다음 단계 |
+| **local** | 개인 맥북에서 `terraform apply`하는 실험용 — 모듈 변경을 실제 AWS에서 검증 | 최소 구성 (`environments/local/*` 그대로) | **이 계정(`727646470302`)을 팀 전체가 공유**(2026-08-12 확정) — `slash-local` AWS CLI 프로필도 같은 계정을 가리킴. ECR처럼 계정 전체가 공유하는 자원은 `environments/bootstrap`으로 소유권을 모아 환경 간 충돌을 막는다(§6). `network`/`frontend`/`cognito`는 dev 상시운영 전환으로 역할이 흡수돼 destroy(2026-08-18) — 필요할 때마다 apply→destroy 반복하는 모듈 검증용 테스트베드로 되돌아감. `eks`도 검증용, 마찬가지로 apply→destroy 반복 |
 | **dev** | prod와 거의 동일한 스펙을 유지하는 공유 테스트 서버 — 팀 전체가 QA에 사용 | prod와 동일 모듈, 동일 값(인스턴스 크기 등) | **이 계정(`727646470302`)으로 확정**(2026-08-11, [이슈 #13](https://github.com/LikeLionTeam4/slash-infra/issues/13)) — prod와 같은 계정을 공유, `Environment=dev` 태그와 리소스명 접미사(`-dev`)로만 구분 | **상시 운영 중**(2026-08-18 전환, [이슈 #24](https://github.com/LikeLionTeam4/slash-infra/issues/24), `docs/operations-log.md` §11) — 이전엔 검증 라운드마다 destroy했지만, 서비스 저장소 CI가 이미지를 push하면 자동으로 dev에 반영되려면 dev가 항상 떠 있어야 해서 전환 |
 | **prod** | 실제 운영 환경 | Multi-AZ, 가용성 우선 | **이 계정(`727646470302`)으로 확정.** `sbsh.cloud` 도메인 위임(가비아 NS)이 이미 이 계정의 Route53 zone을 가리키고 있어서, prod의 apex 도메인(§2)도 결국 이 계정에 있어야 한다 — 별도 prod 계정으로 나중에 재위임하지 않기로 함. 나머지 담당자는 이 계정에 IAM 사용자만 추가 | 미구축 |
 
@@ -236,6 +258,7 @@ local/dev/prod 3단계로 나눈다. **결정(2026-08-12): 팀 전체가 계정 
 - ~~dev 환경의 계정 구조~~ → prod와 같은 계정(`727646470302`)을 공유하는 것으로 확정(2026-08-11, §11, [이슈 #13](https://github.com/LikeLionTeam4/slash-infra/issues/13)). 다음 단계는 `environments/dev/` 착수
 - `slash_demo` DB를 실제로 어떻게 만들지 — **추천(2026-08-12): EKS 안의 일회성 Job.** SSM 포트포워딩용 별도 bastion EC2를 새로 세우는 것보다, 이미 만드는 EKS 노드가 private-app 서브넷에서 DB SG로 가는 경로를 이미 갖고 있어(§4-1) 추가 리소스·보안 표면 없이 `postgres` 클라이언트 이미지로 `CREATE DATABASE slash_demo;` 한 번 실행하고 지우면 된다. dev DB를 실제로 쓰기 시작하는 시점에 적용
 - Karpenter 실제 설치(Helm, NodePool/EC2NodeClass) — IRSA Role은 `eks` 모듈에 준비됐지만 한 번도 설치해본 적 없음(§5)
+- RAG 인덱싱 파이프라인 실측 후 RDS 인스턴스 클래스·CloudWatch 임계치 재조정(§7-3) — `slash-api`의 색인 파이프라인이 dev에 실제로 붙기 전까지는 보류, `db.t4g.small` 유지
 - ~~ALB Ingress Controller 실제 설치~~ → IRSA Role apply + Helm 설치 + mock 이미지로 실제 ALB 응답까지 검증 완료(2026-08-11, §8). 도메인/ACM 연결과 상시 운영은 dev 환경 구축 후([이슈 #10](https://github.com/LikeLionTeam4/slash-infra/issues/10))
 - ~~ArgoCD 설치 및 GitOps 저장소 구조~~ → `helm/` 위치 결정 + local 클러스터에서 ArgoCD 설치·GitOps 자동 배포 왕복 검증까지 완료(2026-08-11, §9, [이슈 #10](https://github.com/LikeLionTeam4/slash-infra/issues/10)). dev 계정 구조가 정해지고 dev 환경이 실제로 구축되면 같은 `argocd/` manifest를 `values-dev.yaml` 기준으로 옮겨 상시 운영 전환
 - ~~GPU 인스턴스 정확한 타입/개수~~ → **결정 변경(2026-08-13, [이슈 #12](https://github.com/LikeLionTeam4/slash-infra/issues/12)): GPU 노드그룹 대신 독립 EC2(`g4dn.xlarge`) 1대, stop/start로 운용.** 상세는 §5-1. 실제 Gemma 모델 크기(2B/7B/9B)에 따라 16GB VRAM으로 부족할 수 있어 `slash-llm` 팀 확인은 여전히 필요
