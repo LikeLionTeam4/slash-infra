@@ -22,6 +22,9 @@ env:
   COGNITO_USER_INFO_URI: "https://slash-dev-061039804626.auth.ap-northeast-2.amazoncognito.com/oauth2/userInfo"
   # slash-nlu 서비스로 클러스터 내부 짧은 주소 사용 (application.yml 주석, 같은 namespace)
   NLU_BASE_URL: "http://slash-nlu"
+  # 2026-08-18: slash-web dev 프론트엔드 착수(이슈 #31) — 기본값(localhost:5173)만으로는
+  # dev.sbsh.cloud에서 오는 브라우저 요청이 CORS로 막힌다.
+  CORS_ALLOWED_ORIGINS: "https://dev.sbsh.cloud"
 
 externalSecrets:
   enabled: true
@@ -49,12 +52,10 @@ envSecrets:
   - VALKEY_AUTH_TOKEN
 
 ingress:
-  # 2026-08-12: image.tag가 비어 있는 동안 ingress.enabled=true였더니, pod가 못 뜨는 것과
-  # 무관하게 ALB Controller가 실제 ALB를 만들어버렸다(과금 발생, 아무도 명시적으로 켠 적
-  # 없는 부수효과). ArgoCD selfHeal 때문에 kubectl로 직접 지워도 다시 살아나므로, git의
-  # 이 값을 false로 낮춰서 소스에서부터 막는다 — prune:true라 ArgoCD가 알아서 정리한다.
-  # 실제 이미지가 준비되면(이슈 #11) image.tag를 채우는 시점에 같이 true로 되돌릴 것.
-  enabled: false
+  # 2026-08-18: slash-web dev 프론트엔드 착수(이슈 #31) — 이미지가 실제로 정상 기동
+  # 확인된 상태(이슈 #23 해소)라 이제 켜도 안전하다. ALB 생긴 뒤 DNS 이름을 확인해서
+  # api.dev.sbsh.cloud A레코드를 연결하는 후속 작업이 필요하다(environments/dev/eks/domain.tf).
+  enabled: true
   host: api.dev.sbsh.cloud
   annotations:
     # ACM 인증서는 dev/eks apply마다 새로 발급된다(도메인 검증 필요, ISSUED 확인은 apply 후
