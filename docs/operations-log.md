@@ -29,16 +29,17 @@ Apply는 이 표의 순서대로, **Destroy는 반대 순서**로 진행한다. 
 | 환경 | 리소스 수 | 핵심 output | 상태 |
 | --- | --- | --- | --- |
 | `environments/bootstrap` | 17 | `route53_zone_id = Z02458772F0ED1QG30X6D`, `bucket_name = slash-tfstate-061039804626`, `ecr_repository_urls = {slash-api, slash-nlu, slash-llm}`, `backend_cicd_role_arns = {api, nlu, llm}` | 적용됨(새 계정, §3 2026-08-13 계정 재발급 항목 참고). ECR 3+lifecycle policy 3을 `local/eks`에서 이전(2026-08-12, §6), 백엔드 CI용 IAM Role 3개(`modules/backend-cicd`) |
-| `environments/local/network` | 38 | `vpc_id = vpc-0c2e4ead5efa44390`, NAT 1개(`ap-northeast-2a`) | 적용됨 |
-| `environments/local/frontend` | 12 | `site_url = https://local.sbsh.cloud`, `bucket_name = slash-web-local-061039804626`, `frontend_deploy_role_arn = arn:aws:iam::061039804626:role/slash-frontend-deploy-local` | 적용됨, 콘텐츠까지 배포됨. GitHub OIDC 배포 Role(`modules/frontend-cicd`) 적용 |
-| `environments/local/cognito` | 3 | `user_pool_id = ap-northeast-2_pb5emFWag`, `user_pool_client_id = cn58fb2l2vej46fafkmb7au9j`, `issuer_url = https://cognito-idp.ap-northeast-2.amazonaws.com/ap-northeast-2_pb5emFWag`, `hosted_domain = https://slash-local-061039804626.auth.ap-northeast-2.amazoncognito.com` | 적용됨, 상시 유지. Managed Login(v2) + 이메일·비밀번호. slash-web/slash-api가 이 값들을 직접 참조하므로 destroy 금지 |
+| `environments/local/network` | 0 | – | **미적용(2026-08-18 destroy, §11-8)** — dev가 상시운영으로 전환되며 local의 module-검증 목적이 dev로 흡수됨. flow-log 버킷에 버전 3301개 쌓여있어 `delete-objects`로 먼저 비운 뒤 destroy |
+| `environments/local/frontend` | 0 | – | **미적용(2026-08-18 destroy)** — dev.sbsh.cloud가 생기면서 역할 완전히 흡수(§11-7) |
+| `environments/local/cognito` | 0 | – | **미적용(2026-08-18 destroy)** — dev Cognito(`ap-northeast-2_kiW46VZ9O`)로 흡수 |
 | `environments/local/eks` | 0 | – | 미적용 — ECR도 bootstrap으로 이전돼서 이제 아무것도 안 남음. 클러스터 재현 이력은 §3/§7 참고 |
 | `environments/dev/network` | 43 | `vpc_id = vpc-0cc23d990ea9b2ba9`, NAT 2개(AZ당 1개) | 적용됨(**2026-08-18 상시운영 전환 재구축**, §11-2). 이전엔 라운드마다 destroy했지만 이제 destroy 예정 없음 |
-| `environments/dev/cognito` | 4 | `user_pool_id = ap-northeast-2_kiW46VZ9O` | 적용됨, 상시 유지(2026-08-18) |
+| `environments/dev/cognito` | 4 | `user_pool_id = ap-northeast-2_kiW46VZ9O` | 적용됨, 상시 유지(2026-08-18). slash-web dev(§11-7)도 이 값을 그대로 씀 |
 | `environments/dev/database` | 8 | `rds_endpoint = slash-rds-dev.c3qme6c6e7fj.ap-northeast-2.rds.amazonaws.com:5432`, `valkey_endpoint = master.slash-valkey-dev.2iapp0.apn2.cache.amazonaws.com` | 적용됨(2026-08-18), RDS Multi-AZ. **주의**: 시크릿 이름(`rds!db-*`, `slash/valkey/dev`)은 재apply마다 바뀔 수 있음(§11-2 트러블슈팅) — 상시운영이면 더 이상 안 바뀔 것 |
-| `environments/dev/eks` | 21 | `cluster_name = slash-eks-dev`, `api_certificate_arn`(ACM, ISSUED), `slash_api_role_arn = arn:aws:iam::061039804626:role/slash-slash-api-dev` | 적용됨(2026-08-18). ArgoCD/ALB Controller/Karpenter 1.10.0/metrics-server/**External Secrets Operator** 전부 Helm 설치 완료, `argocd/applications-dev/` 3개 Synced(slash-nlu/llm Healthy, slash-api는 image.tag 대기 중) |
+| `environments/dev/eks` | 22 | `cluster_name = slash-eks-dev`, `api_certificate_arn`(ACM, ISSUED), `slash_api_role_arn = arn:aws:iam::061039804626:role/slash-slash-api-dev` | 적용됨(2026-08-18). ArgoCD(polling 60s, 이슈 #15)/ALB Controller/Karpenter 1.10.0/metrics-server/External Secrets Operator 전부 정상. `argocd/applications-dev/` 3개 전부 **Healthy**(slash-api도 이슈 #23 해소 후 정상 기동). `api.dev.sbsh.cloud` A레코드 연결(§11-7) 포함 |
 | `environments/dev/observability` | 3 | `sns_topic_arn = arn:aws:sns:ap-northeast-2:061039804626:slash-alarms-dev` | 적용됨(2026-08-18) |
-| `environments/dev/llm-runtime` | 4 | `ollama_private_ip = 10.8.10.40` | 적용됨(2026-08-18), gemma3:4b 로드 완료·`slash-llm` 파드에서 실제 추론 왕복 확인 |
+| `environments/dev/llm-runtime` | 4 | `ollama_private_ip = 10.8.11.201`(Spot, `ap-northeast-2c`) | 적용됨(2026-08-18). Spot 전환 중 `ap-northeast-2a` 용량 부족으로 2c로 재생성(§11-5) — 평일 09~21시 KST만 EventBridge Scheduler로 가동 |
+| `environments/dev/frontend` | 12 | `site_url = https://dev.sbsh.cloud`, `bucket_name = slash-web-dev-061039804626`, `cloudfront_distribution_id = E3509V383MY8KA` | 적용됨(2026-08-18, §11-7). slash-web `deploy-dev.yml` merge → 실배포 → 브라우저로 로그인 리다이렉트까지 왕복 확인 |
 | `environments/prod/*` | – | – | 미구축 |
 
 계정은 `061039804626`(부트캠프 공유, 2026-08-13 재발급 — 옛 계정 `727646470302`는 더 이상 접근 불가). 리전 `ap-northeast-2`. 이 표는 스냅샷이라 실제 값이 궁금하면 각 디렉터리에서 `terraform output`으로 재확인할 것 — 아래는 마지막 갱신 시점(2026-08-13) 기준.
@@ -584,3 +585,24 @@ slash-llm PR(LikeLionTeam4/slash-llm#5)로 `/health`(liveness)·`/ready`(readine
 ### 11-6. ArgoCD webhook 대신 폴링 주기 단축 (이슈 #15, 같은 날)
 
 즉시 sync를 위한 GitHub webhook 연동은 ArgoCD 서버를 인터넷에 새로 노출해야 해서(서브도메인+ACM+Ingress), 공유 계정 리스크 대비 지금 팀 규모에서 얻는 이득이 크지 않다고 판단해 보류. 대신 `timeout.reconciliation`을 180s(기본) → 60s로 낮춰 지연만 줄임(`helm upgrade`, `argocd/README.md`에 반영) — 새 공개 노출 지점 없이 설정 한 줄로 적용·롤백 가능. `helm upgrade` 후 ArgoCD 전 컴포넌트 정상 재기동, 3개 Application 전부 `Synced`/`Healthy` 유지 확인.
+
+### 11-7. slash-web dev 프론트엔드 착수 (이슈 #31, 같은 날)
+
+백엔드 dev가 실제로 QA 가능해진 뒤(§11-1~11-6)로 미뤄뒀던 착수 조건이 충족돼 바로 진행.
+
+- `environments/dev/frontend`(신규): `environments/local/frontend`와 동일 패턴(S3+CloudFront), `dev.sbsh.cloud`로 apply — 12개 리소스, CloudFront 배포에 시간이 걸림(이번엔 특히 오래 걸려 apply 자체는 20분대, 정상 범위)
+- `helm/slash-api/values-dev.yaml`: `ingress.enabled: true` 전환(이미지가 정상 기동 확인된 상태라 이번엔 안전) + `CORS_ALLOWED_ORIGINS` 추가 → ALB 생성 확인 후 `environments/dev/eks/domain.tf`에 alias A레코드 추가(ALB는 Terraform이 모르는 리소스라 DNS/zone ID를 정적 값으로 직접 씀, 기존 ACM cert zone_id와 같은 패턴)
+- Cognito 콜백/로그아웃 URL은 `environments/dev/cognito`가 애초에 `dev.sbsh.cloud`를 기본값으로 미리 등록해뒀던 것 발견 — 별도 조치 불필요(선견지명 있는 설계)
+- slash-web PR(`deploy-dev.yml`, `deploy-local.yml`과 동일 구조이되 `VITE_API_BASE_URL` 채움 + Cognito 값은 dev 전용이라 저장소 공용 `vars.*` 재사용 안 하고 직접 기입) merge → 실제 배포 확인
+- **엔드투엔드 브라우저 검증**: `https://dev.sbsh.cloud` 로딩 → `/login` 클라이언트 라우팅 → "이메일로 계속하기" 클릭 시 실제 Cognito Hosted UI로 리다이렉트, `client_id`/`redirect_uri`/PKCE 파라미터 전부 정확 → 사용자가 직접 로그인까지 성공 확인
+
+### 11-8. local 환경 정리 (같은 날)
+
+dev가 상시운영으로 전환되며 `local/network`(모듈 검증용 기반망)·`local/frontend`(local.sbsh.cloud)·`local/cognito`가 각각 dev의 동급 환경으로 완전히 흡수됨 — 사용자 확인 후 문서화된 순서(§5-1 frontend → §5-4 network → §5-6 cognito, database/eks/observability는 이미 미적용이라 생략)대로 destroy.
+
+- `local/frontend`: CloudFront 비활성화 전파가 이례적으로 오래 걸림(~50분, 보통 15~20분) — AWS SLA 범위 안(최대 90분)이라 별다른 조치 없이 대기, 이후 정상 완료(12개)
+- `local/network`: 39개는 정상 삭제, flow-log 버킷만 `BucketNotEmpty`로 실패(§5-4에 이미 문서화된 케이스) — 버전 3301개(오브젝트+삭제 마커) 쌓여있어 `list-object-versions`+`delete-objects`로 배치 비우기 후 재시도해 완료
+- `local/cognito`: 4개 정상 삭제(Managed Login branding 삭제에 30초)
+- `local/eks`는 원래도 미적용 상태라 손댈 것 없음
+
+최종 확인: `describe-vpcs`/`list-user-pools`로 태그·이름 필터링해 전부 빈 결과, 3개 환경 `terraform state list` 모두 0개.
