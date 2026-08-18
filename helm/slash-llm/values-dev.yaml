@@ -14,6 +14,9 @@ autoscaling:
 
 env:
   # environments/dev/llm-runtime의 ollama_private_ip 출력값 — 정적 값(§5-1, image.repository와
-  # 같은 이유). EC2를 stop/start(터미네이트 아님)로 운용하는 한 안 바뀐다.
-  # 2026-08-18: dev 상시운영 전환으로 VPC를 새로 만들면서 IP가 바뀜(10.8.10.169 → 10.8.10.40).
-  OLLAMA_URL: "http://10.8.10.40:11434"
+  # 같은 이유). stop/start(터미네이트 아님)로는 안 바뀐다 — Spot interruption도
+  # instance_interruption_behavior=stop이라 마찬가지(schedule.tf). 인스턴스를 실제로
+  # 재생성할 때만(AZ 변경 등) 갱신 필요.
+  # 2026-08-18: Spot 전환 중 ap-northeast-2a 용량 부족으로 2c로 재생성하며 IP 변경
+  # (10.8.10.40 → 10.8.11.201).
+  OLLAMA_URL: "http://10.8.11.201:11434"

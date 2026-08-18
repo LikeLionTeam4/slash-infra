@@ -42,3 +42,33 @@ variable "tags" {
   type        = map(string)
   default     = {}
 }
+
+variable "use_spot" {
+  description = "true면 Spot으로 띄운다(2026-08-18 비용 재검토, On-demand 대비 60~90% 절감). AWS가 용량을 회수하면 정지(터미네이트 아님)"
+  type        = bool
+  default     = true
+}
+
+variable "schedule_enabled" {
+  description = "true면 EventBridge Scheduler로 인스턴스를 지정 시간에만 켜둔다"
+  type        = bool
+  default     = true
+}
+
+variable "schedule_start_cron" {
+  description = "인스턴스를 켜는 스케줄(schedule_timezone 기준). aws_scheduler_schedule cron 표현식"
+  type        = string
+  default     = "cron(0 9 ? * MON-FRI *)"
+}
+
+variable "schedule_stop_cron" {
+  description = "인스턴스를 끄는 스케줄(schedule_timezone 기준). aws_scheduler_schedule cron 표현식"
+  type        = string
+  default     = "cron(0 21 ? * MON-FRI *)"
+}
+
+variable "schedule_timezone" {
+  description = "스케줄 cron을 해석할 타임존"
+  type        = string
+  default     = "Asia/Seoul"
+}
