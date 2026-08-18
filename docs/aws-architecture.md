@@ -5,7 +5,7 @@ Slash 프로젝트 전체(웹 프론트엔드 제외 백엔드 서비스군)를 
 ## 1. 개요 / 범위
 
 - 대상 서비스: `slash-api`(코어 API), `slash-nlu`(자연어 분석), `slash-llm`(Gemma 추론), 그리고 이들을 잇는 공통 네트워크/DB/CI-CD 기반.
-- `slash-agent`는 사용자 PC에서 로컬로 도는 컴포넌트라 AWS 인프라 범위에서 제외.
+- `slash-runner`(구 slash-agent)는 사용자 PC에서 로컬로 도는 컴포넌트라 AWS 인프라 범위에서 제외.
 - 프론트엔드(`slash-web`)는 `modules/frontend-hosting`으로 이미 구현되어 있으므로 이 문서에서 재설계하지 않는다. 다만 API 인그레스 설계(§8)는 프론트엔드가 쓰는 CloudFront+ACM 패턴과 대칭이 되도록 맞춘다.
 - 환경은 3단계로 나눈다 (자세한 역할은 §11):
   - **local** — 개인 맥북에서 직접 `terraform apply`하는 실험용. 지금까지 만든 `environments/local/*`이 여기 해당.
