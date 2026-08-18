@@ -46,8 +46,11 @@ module "llm_runtime" {
   name_prefix = "slash"
   environment = "dev"
 
-  # private_app_subnet_ids는 AZ => subnet ID 맵이라 첫 AZ 것 하나만 쓴다 —
-  # 인스턴스 1대라 다중 AZ 분산이 필요 없다(§5-1).
-  subnet_id         = values(data.terraform_remote_state.network.outputs.private_app_subnet_ids)[0]
+  # private_app_subnet_ids는 AZ => subnet ID 맵이라 인스턴스 1대는 AZ 하나만 쓴다.
+  # 2026-08-18: Spot 전환 중 ap-northeast-2a에서 g4dn.xlarge
+  # Server.InsufficientInstanceCapacity 실제 발생(재시도 5회 전부 실패, CloudTrail로 확인)
+  # — AWS 에러 메시지가 권장한 대로 2c로 고정. 굳이 [0]으로 첫 AZ를 쓰지 않고 key로
+  # 명시해서 network 모듈의 맵 키 순서가 바뀌어도 안 흔들리게 한다.
+  subnet_id         = data.terraform_remote_state.network.outputs.private_app_subnet_ids["ap-northeast-2c"]
   security_group_id = data.terraform_remote_state.network.outputs.ollama_security_group_id
 }

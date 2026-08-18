@@ -47,6 +47,22 @@ resource "aws_instance" "ollama" {
   vpc_security_group_ids = [var.security_group_id]
   iam_instance_profile   = aws_iam_instance_profile.ollama.name
 
+  # Spot(2026-08-18, 비용 재검토) — On-demand 상시 가동은 월 ~$475인데, 평일
+  # 업무시간만 켜두기로 하면서(schedule.tf) Spot까지 더하면 월 ~$60~85로 줄어든다.
+  # interruption_behavior=stop이라 AWS가 용량을 회수해도 터미네이트가 아니라 정지 —
+  # EBS의 설치 상태(모델 등)는 stop/start 때와 동일하게 보존된다. persistent가
+  # 아니면 stop을 지정할 수 없다(AWS 제약).
+  dynamic "instance_market_options" {
+    for_each = var.use_spot ? [1] : []
+    content {
+      market_type = "spot"
+      spot_options {
+        instance_interruption_behavior = "stop"
+        spot_instance_type             = "persistent"
+      }
+    }
+  }
+
   user_data = templatefile("${path.module}/user_data.sh.tpl", {
     ollama_model = var.ollama_model
   })
