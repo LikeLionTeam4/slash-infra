@@ -1,6 +1,6 @@
 # dev 환경 구축 진행 중(2026-08-12, network/cognito/database/eks/observability 적용 완료).
 image:
-  tag: "" # 아직 비워둠 — slash-api에 실제 Dockerfile/CI가 생기면(이슈 #11) 커밋 SHA로 채워짐
+  tag: "sha-56d872b69e0fe391ed57a58f9371a94293e6bf47"
 
 serviceAccount:
   # 2026-08-18 environments/dev/eks apply로 채움 (modules/eks/slash_api_irsa.tf, 이슈 #23/#24)
