@@ -606,3 +606,11 @@ dev가 상시운영으로 전환되며 `local/network`(모듈 검증용 기반�
 - `local/eks`는 원래도 미적용 상태라 손댈 것 없음
 
 최종 확인: `describe-vpcs`/`list-user-pools`로 태그·이름 필터링해 전부 빈 결과, 3개 환경 `terraform state list` 모두 0개.
+
+### 11-9. slash-nlu readinessProbe `/ready` 전환 — 이슈 생성 (이슈 #35, 같은 날)
+
+§11-4(이슈 #25)에서 slash-nlu는 별도 readiness 엔드포인트가 없어 `/health` 하나로 liveness/readiness를 겸했다. 이후 slash-nlu에서 `/health`(프로세스 상태)와 `/ready`(analyzer 준비 상태, 미준비 시 503)를 분리하는 PR이 올라옴 — [LikeLionTeam4/slash-nlu#7](https://github.com/LikeLionTeam4/slash-nlu/pull/7).
+
+- infra 후속 작업을 [이슈 #35](https://github.com/LikeLionTeam4/slash-infra/issues/35)로 생성 — `helm/slash-nlu/templates/deployment.yaml`의 `readinessProbe.httpGet.path`를 `/health` → `/ready`로 변경(`livenessProbe`는 `/health` 유지).
+- **블로킹 조건**: `values-dev.yaml`의 `image.tag`가 특정 sha(`sha-d46fa8b81866a0d7f738154591b109dd914583cc`)로 고정돼 있어, PR #7이 merge되어 새 이미지가 빌드되기 전에는 readinessProbe만 먼저 바꿀 수 없다 — 바꾸면 현재 이미지에 없는 `/ready`를 찾다 404로 readiness가 계속 실패한다. 이번엔 §11-4의 slash-llm(PR #27, `/ready` merge 확인 후 연결)과 같은 순서를 그대로 따른 것.
+- PR #7에 이슈 #35 링크와 "merge되면 알려달라"는 코멘트만 남기고 대기 — merge 확인 후 probe 변경·`image.tag` 갱신·`helm lint`/`helm template` 검증·dev 배포까지 진행 예정(§11-4와 동일 절차).
