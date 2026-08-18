@@ -34,6 +34,14 @@ ingress:
 
 env: {}
 
+# Spring Boot Actuator가 management.endpoint.health.probes.enabled=true(application.yml)로
+# liveness/readiness를 이미 분리 노출 중 — 여기서는 연결만 한다. Flyway 마이그레이션이
+# 기동 중에 도는 걸 감안해 initialDelay를 둔다.
+probes:
+  initialDelaySeconds: 20
+  periodSeconds: 10
+  failureThreshold: 3
+
 externalSecrets:
   # true면 External Secrets Operator(클러스터에 별도 Helm 설치 필요 — external-secrets/README.md,
   # ArgoCD 대상 아닌 kube-system 애드온이라 karpenter/alb-controller와 같은 패턴)가 AWS Secrets

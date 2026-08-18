@@ -22,6 +22,13 @@ service:
 
 env: {}
 
+# /health 하나로 liveness/readiness를 겸한다(slash-nlu는 별도 readiness 엔드포인트가
+# 없음). Kiwi 형태소 사전 로딩 때문에 기동이 느릴 수 있어 initialDelay를 넉넉히 둔다.
+probes:
+  initialDelaySeconds: 20
+  periodSeconds: 10
+  failureThreshold: 3
+
 # Kiwi 형태소 사전을 메모리에 올려서 api/llm과 같은 128Mi/256Mi로는 OOMKilled(2026-08-13
 # dev 배포 검증 중 실측). §13 TODO였던 "slash-nlu 컴퓨트 요구사항 미확정"이 실제로
 # 터진 것 — 정확한 최소값은 아직 안 재봤고, 우선 넉넉히 올려서 기동만 확인한다.
