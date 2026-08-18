@@ -621,3 +621,16 @@ dev가 상시운영으로 전환되며 `local/network`(모듈 검증용 기반�
 - ArgoCD 기본 폴링 주기(§11-6에서 60s로 단축)를 기다리지 않고 `kubectl patch application slash-nlu -n argocd --type merge -p '{"metadata":{"annotations":{"argocd.argoproj.io/refresh":"hard"}}}'`로 즉시 반영 확인.
 - **검증**: 롤아웃 완료(`kubectl rollout status` 성공) 후 파드 스펙에서 `readinessProbe=/ready`, `livenessProbe=/health` 확인, 파드 안에서 직접 `GET /ready` 호출해 `200 {"status":"UP","analyzerReady":true}` 응답 확인.
 - PR #7에 dev 배포 완료 코멘트 작성, 팀원에게 공유.
+
+### 11-10. dev 자유입력 종단 검증 + slash-api/nlu/llm git pull 확인 (같은 날)
+
+§11-9 배포 검증 김에 로컬 `slash-agent`를 dev 모드로 재기동해 실제 PC 에이전트 페어링까지 마친 뒤(설정 > 연동에서 새 코드 발급 → 재페어링 → `READY` 확인), `dev.sbsh.cloud`에서 자유입력 경로를 직접 눌러봤다.
+
+- **`slash-web` 버그 발견·수정**: `/new`에서 지역 없이 "오늘 날씨 어때"처럼 보내면 백엔드가 `NEEDS_CLARIFICATION`으로 응답하는데, 프론트가 이 상태를 종료 상태로 안 봐서 **무한 폴링**되고 백엔드가 준 실제 질문(`question`)도 화면에 안 뜨는 버그를 발견 — `slash-web` 이슈 #32로 등록하고 같은 날 수정(PR #33, `fix/needs-clarification-free-text` → dev merge → CD 자동 배포). `TaskDetail`에 `question`/`correlationId` 필드 추가, `NEEDS_CLARIFICATION`을 별도 phase로 분리해 폴링 중단 + 질문 표시. 답변은 별도 입력 UI 없이 기존 검색창을 고쳐 Enter로 처리 — `slash-api`의 `POST /api/v1/requests`가 `correlationId`를 안 받는(매 요청마다 새로 발급) stateless 구조라 대화 이어가기 자체가 없기 때문. dev 배포 후 실제로 "오늘 날씨 어때" → 질문 표시 → "서울 날씨 어때"로 재입력 → 정상적으로 새 요청이 나가 종료 상태까지 도달하는 것까지 브라우저로 확인.
+- **설계 확인**: `slash-api/docs/frontend-api-contract.md`(W1-04 입력창 화면) 상태값 표가 `NEEDS_CLARIFICATION`을 "question을 보여주고 다시 입력받기"로 이미 명시하고 있어, `/chat` 화면으로 전환하는 설계가 아니라 지금 고친 인라인 방식이 계약대로였음을 확인. 나중에 자유 대화형 기능(`GENERAL_CHAT` 등)이 실제로 붙을 때 `/chat/:id`(지금은 `mockThreads.ts` mock 전용)를 진짜 대화 스레드로 재설계할지는 `slash-web` 이슈 #34로 남겨 후속 논의로 미룸.
+- **`slash-api`/`slash-nlu`/`slash-llm` 로컬 저장소 git pull 확인**: 세 저장소 모두 origin/dev보다 뒤처져 있어 pull.
+  - **`slash-api`**: 두 커밋 새로 확인됨.
+    1. **Valkey AUTH/TLS 픽스**(PR #35, `slash-infra` 이슈 #23 연결) — dev 앱이 실제로 **크래시루프**였던 근본 원인 수정. 관리형 Valkey가 `transit_encryption_enabled=true`+AUTH를 요구하는데 앱이 평문 접속을 시도해 TLS 핸드셰이크 타임아웃 → `wsMessageListenerContainer` 초기화 실패 → 프로세스 전체 다운. `application-dev.yml`/`application-demo.yml`에 `password: ${VALKEY_AUTH_TOKEN}` + `ssl.enabled: true` 추가. 확인 시점에 **이미 CD 봇이 자동 배포까지 끝낸 상태**였음(현재 파드 `restarts=0`, `values-dev.yaml` image.tag도 CD 봇이 이미 갱신 — 로컬 clone만 한 커밋 뒤처져 있었음). 커밋 타임스탬프(11:25 KST)가 이번 세션 자유입력 테스트(15시대)보다 훨씬 앞서 있어, 오늘 세션 내내 우리가 테스트한 `/상태`·자유입력·`NEEDS_CLARIFICATION` 전부 이 픽스가 이미 적용된 상태에서 검증한 것으로 확인 — **재검증 불필요**.
+    2. **NLU 기본 주소 픽스**(PR #38, 이슈 #20) — `slash.nlu.base-url` 기본값이 `localhost:8000`(slash-llm 포트)으로 잘못 잡혀 있던 걸 `8001`(slash-nlu 포트)로 수정. 커밋 메시지에 "배포는 멀쩡하고 로컬만 깨진다"고 명시 — Helm이 항상 `NLU_BASE_URL=http://slash-nlu`를 명시적으로 주입해 dev 클러스터엔 영향 없는 **로컬 전용 버그**, infra 조치 불필요.
+  - **`slash-nlu`/`slash-llm`**: 각각 `/ready` 엔드포인트 merge(#7, #5) — 이미 §11-9/§11-4에서 처리·검증 완료한 것과 동일 커밋, 로컬 clone만 뒤처져 있었을 뿐 새로운 변화 없음.
+- **결론**: 이번 git pull로 드러난 변화 중 infra가 추가로 손볼 부분은 없음 — Valkey 픽스는 이미 배포·검증됐고, NLU 포트 픽스는 로컬 전용이라 dev에 영향 없음. 오늘 세션에서 검증한 내용(readinessProbe 전환, 자유입력 NEEDS_CLARIFICATION 수정)도 전부 그대로 유효.
