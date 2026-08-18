@@ -14,9 +14,10 @@ autoscaling:
 
 env:
   # environments/dev/llm-runtime의 ollama_private_ip 출력값 — 정적 값(§5-1, image.repository와
-  # 같은 이유). stop/start(터미네이트 아님)로는 안 바뀐다 — Spot interruption도
-  # instance_interruption_behavior=stop이라 마찬가지(schedule.tf). 인스턴스를 실제로
-  # 재생성할 때만(AZ 변경 등) 갱신 필요.
+  # 같은 이유). 매일 스케줄되는 stop/start(schedule.tf)로는 안 바뀐다 — 인스턴스를 실제로
+  # 재생성할 때만(AZ 변경, Spot->On-Demand 전환 등) 갱신 필요.
   # 2026-08-18: Spot 전환 중 ap-northeast-2a 용량 부족으로 2c로 재생성하며 IP 변경
-  # (10.8.10.40 → 10.8.11.201).
-  OLLAMA_URL: "http://10.8.11.201:11434"
+  # (10.8.10.40 → 10.8.11.201). 같은 날 2c에서도 InsufficientInstanceCapacity 재현돼
+  # On-Demand로 전환(environments/dev/llm-runtime use_spot=false)하며 다시 재생성, IP 변경
+  # (10.8.11.201 → 10.8.11.172).
+  OLLAMA_URL: "http://10.8.11.172:11434"

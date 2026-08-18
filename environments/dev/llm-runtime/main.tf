@@ -53,4 +53,10 @@ module "llm_runtime" {
   # 명시해서 network 모듈의 맵 키 순서가 바뀌어도 안 흔들리게 한다.
   subnet_id         = data.terraform_remote_state.network.outputs.private_app_subnet_ids["ap-northeast-2c"]
   security_group_id = data.terraform_remote_state.network.outputs.ollama_security_group_id
+
+  # 2026-08-18 (같은 날 후속) — 2a에 이어 2c에서도 g4dn.xlarge InsufficientInstanceCapacity
+  # 재현(StartInstances 재시도 2회 전부 실패). 하루에 AZ 둘 다에서 용량 회수를 겪어 Spot의
+  # 60~90% 절감보다 "업무시간에 못 켜질 수 있다"는 위험이 dev 팀 사용성에 더 크다고 판단 —
+  # 09~21시 스케줄(schedule.tf)은 그대로 두고 On-Demand로 전환한다. 월 ~$60~85 -> ~$170.
+  use_spot = false
 }
