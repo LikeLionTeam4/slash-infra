@@ -1,19 +1,34 @@
 # argocd
 
-ArgoCD Application manifest. `docs/aws-architecture.md` §9 설계상 GitOps 파이프라인은
-dev 환경부터 적용 대상이지만, dev가 아직 미구축이라 [이슈 #10](https://github.com/LikeLionTeam4/slash-infra/issues/10)에서는
-local 클러스터를 테스트베드 삼아 "Git 커밋 → ArgoCD 자동 배포" 흐름 자체를 먼저 검증한다
-(ALB Controller를 local에서 먼저 검증했던 것과 같은 패턴).
+ArgoCD Application manifest. `applications/*.yaml`은 local 클러스터 검증용(이슈 #10,
+`values-local.yaml`), `applications-dev/*.yaml`이 2026-08-18부터 상시 운영 중인 실제
+dev 환경용(`values-dev.yaml`, 이슈 #24)이다.
 
-## 지금 상태
+## 웹훅 대신 폴링 주기 단축 (2026-08-18, 이슈 #15)
 
-`applications/*.yaml` 3개가 각각 `helm/slash-api`, `helm/slash-nlu`, `helm/slash-llm`을
-`dev` 브랜치 기준으로 보고 `values-local.yaml`을 적용하도록 되어 있다 — 즉 지금은 local
-클러스터 검증용 설정이다. dev 환경이 실제로 구축되면 `targetRevision`/`valueFiles`를
-`values-dev.yaml` 기준으로 바꾸고, 이 Application들이 가리키는 클러스터도 dev EKS로
-옮겨야 한다.
+**즉시 sync를 위한 GitHub webhook은 도입하지 않기로 결정.** ArgoCD 서버를 인터넷에
+노출해야 하는데(새 서브도메인+ACM+Ingress), 이 계정이 다른 부트캠프 팀과 공유하는
+계정이라 새 공개 노출 지점을 늘리는 리스크가 지금 팀 규모에서 얻는 이득(3분→수초)보다
+크다고 판단했다. 대신 `timeout.reconciliation`을 기본 180s → 60s로 낮춰 지연을
+줄였다 — 설정 한 줄로 되돌리기도 쉽고 새 컴포넌트/노출 지점이 없다. 실제로 근접
+즉시성이 필요해지면(트래픽·팀 규모가 커지면) 그때 webhook을 재검토한다.
 
-## ArgoCD 설치 (local 검증)
+## ArgoCD 설치 (dev)
+
+```bash
+aws eks update-kubeconfig --name slash-eks-dev --region ap-northeast-2 --profile slash-local
+
+helm repo add argo https://argoproj.github.io/argo-helm
+helm repo update argo
+kubectl create namespace argocd
+helm install argocd argo/argo-cd --namespace argocd --version 7.7.11 \
+  --set configs.cm."timeout\.reconciliation"=60s \
+  --wait --timeout 5m
+
+kubectl apply -f argocd/applications-dev/
+```
+
+## ArgoCD 설치 (local 검증용, 참고)
 
 ```bash
 aws eks update-kubeconfig --name slash-eks-local --region ap-northeast-2 --profile slash-local

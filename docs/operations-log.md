@@ -558,8 +558,29 @@ K8s부터 정리(ArgoCD Application 3개 삭제 → `deployment,hpa,service,serv
 - **엔드투엔드 검증**: `slash-llm` 파드 → Ollama EC2(새 IP) → 실제 Gemma3 요약 응답 확인(첫 요청은 콜드스타트로 30초 넘게 걸려 타임아웃 났다가 90초로 재시도해 성공 — 이후 요청은 더 빠를 것으로 예상). `slash-nlu` 파드 → `/internal/v1/nlu/analyze` 실제 요청도 정상 응답.
 - **ESO 왕복 검증**(이슈 #23/#24 핵심 목표): `slash-api`의 ServiceAccount에 IRSA annotation이 붙은 뒤 `SecretStore`가 `Valid`로 전환 → `ExternalSecret`이 `SecretSynced`로 전환 → `slash-api-secrets` K8s Secret에 `DB_USERNAME`/`DB_PASSWORD`/`VALKEY_AUTH_TOKEN` 키 생성까지 확인(값은 확인하지 않음, 존재만 확인). **처음엔 ArgoCD가 로컬에서 값만 바꾼 values-dev.yaml을 못 봐서(git push 전) IRSA annotation이 안 붙어 `InvalidProviderConfig`로 실패했다** — git push 후 `kubectl patch application ... argocd.argoproj.io/refresh=hard`로 강제 refresh, ExternalSecret은 `force-sync` 어노테이션으로 강제 재동기화해 확인. **교훈**: ArgoCD는 로컬 파일이 아니라 git 원격을 본다 — 로컬에서 값만 바꾸고 push를 깜빡하면 "적용됐는데 왜 안 되지" 착각하기 쉽다.
 
-### 11-3. 다음 라운드로 이월된 작업
+### 11-3. 다음 라운드로 이월된 작업 (전부 같은 날 처리 완료, §11-4~11-6 참고)
 
-- slash-infra write용 PAT/Deploy key 발급(사용자 액션) + slash-api/nlu/llm 세 저장소 workflow에 tag-bump 스텝 추가(이슈 #11 CI 완료되면 slash-api도 이 경로로 배포됨)
-- AWS Budgets 월 $100 한도, GPU EC2(Ollama) stop/start 정책을 상시운영 기준으로 재검토 — **다음에 사용자와 비용 예측 같이 하기로 함**
-- (선택) ArgoCD GitHub webhook 연동 — 이슈 #15
+- slash-infra write용 PAT/Deploy key 발급(사용자 액션) + slash-api/nlu/llm 세 저장소 workflow에 tag-bump 스텝 추가(이슈 #11 CI 완료되면 slash-api도 이 경로로 배포됨) → 완료, PAT 발급·PR 3개 merge·실제 dev push로 왕복 검증까지 확인
+- AWS Budgets 월 $100 한도, GPU EC2(Ollama) stop/start 정책을 상시운영 기준으로 재검토 → §11-5
+- (선택) ArgoCD GitHub webhook 연동 — 이슈 #15 → §11-6, webhook 대신 폴링 주기 단축으로 결론
+
+### 11-4. liveness/readiness probe 연결 (이슈 #25, 같은 날)
+
+slash-llm PR(LikeLionTeam4/slash-llm#5)로 `/health`(liveness)·`/ready`(readiness, Ollama 연결+모델 확인) 분리를 팀원과 리뷰 → 3개 서비스 Helm chart에 실제로 probe 연결.
+
+- slash-api: Spring Boot Actuator가 이미 노출 중인 `/actuator/health/{liveness,readiness}`에 연결(PR #26)
+- slash-nlu: 별도 readiness 엔드포인트가 없어 `/health` 하나로 겸용(PR #26), Kiwi 사전 로딩 감안해 `initialDelaySeconds: 20`
+- slash-llm: `/ready` merge 확인 후 연결(PR #27) — `LLM_READY_TIMEOUT`(앱 기본 2초)보다 K8s httpGet 기본 timeout(1초)이 짧아서 `timeoutSeconds: 3`으로 여유
+- 3개 PR 전부 merge → ArgoCD 자동 반영 → 롤링 업데이트 정상 완료(전 파드 `1/1 Running`, 재시작 0회)까지 확인
+
+### 11-5. GPU EC2 Spot 전환 + 스케줄, Budgets 한도 상향 (이슈 #5, 같은 날)
+
+사용자와 함께 dev 상시운영 기준 비용을 실측 스펙으로 재산정 — EKS/RDS(Multi-AZ)/Valkey/NAT 2개 baseline만 월 ~$380~390, GPU On-demand 상시 가동이면 +~$475(합계 ~$855). 예전 $100 한도는 apply→destroy 라운드 시절 기준값이라 이미 무의미했음.
+
+- **결정**: Ollama EC2를 Spot(월 ~$60~85로 절감) + 평일 09~21시 KST만 가동으로 전환(PR #28). Lambda 없이 EventBridge Scheduler가 EC2 API(`StartInstances`/`StopInstances`)를 직접 호출 — 불필요한 컴포넌트를 안 늘리는 기존 원칙과 같은 방향. `instance_interruption_behavior=stop`이라 AWS가 용량을 회수해도 터미네이트가 아니라 정지, EBS의 모델 설치 상태 보존.
+- **트러블슈팅**: Spot 전환은 `aws_instance`의 `instance_market_options`가 ForceNew라 인스턴스 재생성이 필요했는데, 재생성 중 `ap-northeast-2a`에서 g4dn.xlarge `Server.InsufficientInstanceCapacity` 실제 발생(CloudTrail로 재시도 5회 전부 실패 확인, AWS provider가 자동 재시도하느라 겉으로는 "Still creating..."만 계속 찍혀서 원인 파악에 시간이 걸림) — AWS 에러 메시지가 권장한 대로 서브넷을 `ap-northeast-2c`로 고정해서 해결. 재생성으로 사설 IP도 바뀌어(`helm/slash-llm/values-dev.yaml`) 갱신, SSM으로 `gemma3:4b` 재pull 완료 확인 후 반영.
+- **Budgets**: 재산정 결과(baseline+GPU Spot·스케줄 ≈ 월 $440~475) 기준 $100 → $500으로 상향(PR #29).
+
+### 11-6. ArgoCD webhook 대신 폴링 주기 단축 (이슈 #15, 같은 날)
+
+즉시 sync를 위한 GitHub webhook 연동은 ArgoCD 서버를 인터넷에 새로 노출해야 해서(서브도메인+ACM+Ingress), 공유 계정 리스크 대비 지금 팀 규모에서 얻는 이득이 크지 않다고 판단해 보류. 대신 `timeout.reconciliation`을 180s(기본) → 60s로 낮춰 지연만 줄임(`helm upgrade`, `argocd/README.md`에 반영) — 새 공개 노출 지점 없이 설정 한 줄로 적용·롤백 가능. `helm upgrade` 후 ArgoCD 전 컴포넌트 정상 재기동, 3개 Application 전부 `Synced`/`Healthy` 유지 확인.
