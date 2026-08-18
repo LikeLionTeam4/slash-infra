@@ -57,3 +57,27 @@ variable "slash_api_secret_arns" {
   type        = list(string)
   default     = []
 }
+
+variable "schedule_enabled" {
+  description = "true면 EventBridge Scheduler로 범용 노드그룹을 지정 시간에만 띄운다(컨트롤플레인은 대상 아님)"
+  type        = bool
+  default     = true
+}
+
+variable "schedule_start_cron" {
+  description = "노드그룹을 node_desired_size/min/max로 복원하는 스케줄(schedule_timezone 기준). aws_scheduler_schedule cron 표현식"
+  type        = string
+  default     = "cron(0 9 ? * MON-FRI *)"
+}
+
+variable "schedule_stop_cron" {
+  description = "노드그룹을 0/0/0으로 스케일다운하는 스케줄(schedule_timezone 기준). aws_scheduler_schedule cron 표현식"
+  type        = string
+  default     = "cron(0 21 ? * MON-FRI *)"
+}
+
+variable "schedule_timezone" {
+  description = "스케줄 cron을 해석할 타임존"
+  type        = string
+  default     = "Asia/Seoul"
+}

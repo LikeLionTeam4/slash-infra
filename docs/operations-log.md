@@ -35,8 +35,8 @@ Apply는 이 표의 순서대로, **Destroy는 반대 순서**로 진행한다. 
 | `environments/local/eks` | 0 | – | 미적용 — ECR도 bootstrap으로 이전돼서 이제 아무것도 안 남음. 클러스터 재현 이력은 §3/§7 참고 |
 | `environments/dev/network` | 43 | `vpc_id = vpc-0cc23d990ea9b2ba9`, NAT 2개(AZ당 1개) | 적용됨(**2026-08-18 상시운영 전환 재구축**, §11-2). 이전엔 라운드마다 destroy했지만 이제 destroy 예정 없음 |
 | `environments/dev/cognito` | 4 | `user_pool_id = ap-northeast-2_kiW46VZ9O` | 적용됨, 상시 유지(2026-08-18). slash-web dev(§11-7)도 이 값을 그대로 씀 |
-| `environments/dev/database` | 8 | `rds_endpoint = slash-rds-dev.c3qme6c6e7fj.ap-northeast-2.rds.amazonaws.com:5432`, `valkey_endpoint = master.slash-valkey-dev.2iapp0.apn2.cache.amazonaws.com` | 적용됨(2026-08-18), RDS Multi-AZ. **주의**: 시크릿 이름(`rds!db-*`, `slash/valkey/dev`)은 재apply마다 바뀔 수 있음(§11-2 트러블슈팅) — 상시운영이면 더 이상 안 바뀔 것 |
-| `environments/dev/eks` | 22 | `cluster_name = slash-eks-dev`, `api_certificate_arn`(ACM, ISSUED), `slash_api_role_arn = arn:aws:iam::061039804626:role/slash-slash-api-dev` | 적용됨(2026-08-18). ArgoCD(polling 60s, 이슈 #15)/ALB Controller/Karpenter 1.10.0/metrics-server/External Secrets Operator 전부 정상. `argocd/applications-dev/` 3개 전부 **Healthy**(slash-api도 이슈 #23 해소 후 정상 기동). `api.dev.sbsh.cloud` A레코드 연결(§11-7) 포함 |
+| `environments/dev/database` | 10 | `rds_endpoint = slash-rds-dev.c3qme6c6e7fj.ap-northeast-2.rds.amazonaws.com:5432`, `valkey_endpoint = master.slash-valkey-dev.2iapp0.apn2.cache.amazonaws.com` | 적용됨(2026-08-18), RDS Multi-AZ. **주의**: 시크릿 이름(`rds!db-*`, `slash/valkey/dev`)은 재apply마다 바뀔 수 있음(§11-2 트러블슈팅) — 상시운영이면 더 이상 안 바뀔 것. RDS는 평일 09~21시 KST만 EventBridge Scheduler로 가동(§12), Valkey는 stop/start API가 없어 상시 유지 |
+| `environments/dev/eks` | 24 | `cluster_name = slash-eks-dev`, `api_certificate_arn`(ACM, ISSUED), `slash_api_role_arn = arn:aws:iam::061039804626:role/slash-slash-api-dev` | 적용됨(2026-08-18). ArgoCD(polling 60s, 이슈 #15)/ALB Controller/Karpenter 1.10.0/metrics-server/External Secrets Operator 전부 정상. `argocd/applications-dev/` 3개 전부 **Healthy**(slash-api도 이슈 #23 해소 후 정상 기동). `api.dev.sbsh.cloud` A레코드 연결(§11-7) 포함. 범용 노드그룹은 평일 09~21시 KST만 EventBridge Scheduler로 가동(§12), 컨트롤플레인은 stop 개념이 없어 상시 유지 |
 | `environments/dev/observability` | 3 | `sns_topic_arn = arn:aws:sns:ap-northeast-2:061039804626:slash-alarms-dev` | 적용됨(2026-08-18) |
 | `environments/dev/llm-runtime` | 4 | `ollama_private_ip = 10.8.11.201`(Spot, `ap-northeast-2c`) | 적용됨(2026-08-18). Spot 전환 중 `ap-northeast-2a` 용량 부족으로 2c로 재생성(§11-5) — 평일 09~21시 KST만 EventBridge Scheduler로 가동 |
 | `environments/dev/frontend` | 12 | `site_url = https://dev.sbsh.cloud`, `bucket_name = slash-web-dev-061039804626`, `cloudfront_distribution_id = E3509V383MY8KA` | 적용됨(2026-08-18, §11-7). slash-web `deploy-dev.yml` merge → 실배포 → 브라우저로 로그인 리다이렉트까지 왕복 확인 |
@@ -645,3 +645,29 @@ dev가 상시운영으로 전환되며 `local/network`(모듈 검증용 기반�
 - 아직 실제 트래픽 병목 근거가 없고, 상향된 $500 예산 한도(§11-5) 안에서 GPU 인스턴스를 추가하는 것은 비용 영향이 큼 — 근거 없이 먼저 늘릴 이유가 없음.
 
 **다음 단계(이슈 #37에 체크리스트로 등록)**: ① Ollama 앞단 요청 큐/동시성 제한 검토 → ② 실사용 GPU 사용률·요청 대기시간 모니터링 체계 마련 → ③ 모니터링으로 병목이 실제 확인되면, 반응형 ASG보다는 예측 가능한 트래픽 패턴에 맞춘 스케줄형 추가 인스턴스 방식 우선 검토 → ④ 오토스케일링 채택 시 모델 배포 방식(AMI 베이킹/EFS 공유 등) 재설계 필요 여부 확인.
+
+## 12. EKS 노드그룹 + RDS 09~21시 스케줄링 (2026-08-19)
+
+사용자 요청: "slash 프로젝트들 모두 9시~21시까지만 운영해도 괜찮을 거 같다 — 그 이후엔 작업 안 함". §11-5에서 Ollama EC2에만 적용해뒀던 평일 09~21시 KST 스케줄을 dev 환경 전체로 확대할 수 있는지 검토.
+
+**범위 결정**: 리소스별로 stop/start 지원 여부가 갈려서 전체를 동일하게 다룰 수 없었다.
+- **EKS 범용 노드그룹(EC2)**, **RDS**: 각각 `UpdateNodegroupConfig`(스케일 0)/`StartDBInstance`·`StopDBInstance` API로 stop/start에 준하는 효과를 낼 수 있음 → **적용**.
+- **EKS 컨트롤플레인**, **NAT Gateway**, **Valkey(ElastiCache)**, **ALB**: stop 개념 자체가 없어 끄려면 삭제 후 재생성해야 함 — 비용 절감(합쳐서 월 ~$121 추정)보다 매일 밤 재생성하는 리스크(NAT EIP 변경, ALB는 K8s Ingress Controller가 관리해 외부 삭제 시 컨트롤러와 상태 불일치 가능, EKS 컨트롤플레인 재생성은 8/18에 그만둔 destroy/recreate 방식으로 회귀)가 훨씬 커서 **상시 유지로 결정**.
+- 비용 추정(Terraform 코드 기준 정가 계산, 실측 아님 — `Project=slash` 비용 배분 태그가 활성화 안 돼 있어 `slash-monthly-cost` 예산의 `ActualSpend`가 계속 $0으로 잡히는 것도 이번에 확인, 별도 후속 필요): EKS 노드그룹 3대(t3.medium) 월 ~$130, RDS Multi-AZ(db.t4g.small) 월 ~$50 — 09~21시 평일만 가동(주 60h/168h ≈ 36%)으로 각각 월 ~$84, ~$32 절감(합계 ~$116/월).
+
+**구현**: `modules/llm-runtime/schedule.tf`와 동일하게 Lambda 없이 EventBridge Scheduler universal target을 직접 쓴다.
+- `modules/eks/schedule.tf` — `aws-sdk:eks:updateNodegroupConfig`. 09시엔 `node_desired_size`/`min`/`max`(3/2/4)로 복원, 21시엔 전부 0. `aws_eks_node_group.general`에 `lifecycle { ignore_changes = [scaling_config] }` 추가 — 안 하면 스케줄러가 0으로 바꿔둔 값을 다음 `terraform apply`가 선언값으로 되돌리려는 drift가 매번 감지됨(사이즈를 실제로 바꾸려면 이 lifecycle을 잠깐 지우고 apply해야 하는 트레이드오프를 코드 주석으로 남김).
+- `modules/database/schedule.tf` — `aws-sdk:rds:startDBInstance`/`stopDBInstance`. RDS는 Terraform이 인스턴스 실행 상태 자체를 관리하는 속성이 없어 EC2/Ollama 케이스처럼 lifecycle 처리가 불필요.
+- 둘 다 `schedule_enabled`(기본 true) 변수로 끌 수 있게 했고, cron/timezone 기본값은 Ollama와 동일(`cron(0 9 ? * MON-FRI *)`/`cron(0 21 ? * MON-FRI *)`, `Asia/Seoul`).
+
+### 12-1. EventBridge Scheduler universal target의 파라미터 casing이 서비스마다 다르다 (2026-08-19)
+
+`environments/dev/eks`, `environments/dev/database` 둘 다 `terraform apply`가 IAM Role/Policy까지는 성공했는데 `aws_scheduler_schedule` 생성이 `ValidationException: ... missing the following field(s)`로 실패했다.
+
+- **EKS**: AWS 공식 API 레퍼런스(`API_UpdateNodegroupConfig.html`)의 요청 바디는 camelCase(`clusterName`, `nodegroupName`, `scalingConfig.desiredSize` 등)라 그대로 썼는데, 실제 필요한 키는 **PascalCase**(`ClusterName`, `NodegroupName`, `ScalingConfig.DesiredSize`)였다.
+- **RDS**: 반대로 공식 문서 표기(`DBInstanceIdentifier`, 대문자 DB)를 그대로 썼는데, 실제 필요한 키는 **`DbInstanceIdentifier`**(소문자 b)였다 — Ollama(EC2 `StartInstances`)에서 `InstanceIds`가 그대로 통했던 것과 달리, RDS/EKS는 서비스 내부 모델의 멤버명이 공개 API 문서 표기와 다르게 관리되고 있어서 겪은 불일치.
+- **원인**: EventBridge Scheduler의 universal target(`aws-sdk:<service>:<action>`)은 각 서비스의 **공식 REST/Query API 문서 표기가 아니라 AWS SDK 내부 서비스 모델의 멤버명**으로 Input JSON을 검증한다. 이 멤버명은 서비스마다(심지어 같은 서비스 안에서도) 공개 문서 표기와 다를 수 있다 — 이번처럼 EC2는 우연히 일치했지만 EKS(camelCase→PascalCase)/RDS(DB→Db)는 둘 다 달랐다.
+- **조치**: 두 모듈 모두 에러 메시지가 알려주는 정확한 필드명으로 수정(`modules/eks/schedule.tf`의 `ClusterName`/`NodegroupName`/`ScalingConfig`, `modules/database/schedule.tf`의 `DbInstanceIdentifier`) 후 재apply, 각각 `2 to add, 0 to change, 0 to destroy`로 정상 완료. `aws scheduler list-schedules`로 4개 스케줄(`slash-eks-node-start/stop-dev`, `slash-rds-start/stop-dev`) 전부 `ENABLED` 확인.
+- **교훈**: universal target을 새 서비스에 처음 쓸 때는 공식 API 문서만 믿지 말고, 가능하면 먼저 `plan`이 아니라 실제 `apply`로 한 번 검증하거나(에러 메시지가 정확한 필드명을 알려준다) 그 서비스로 이미 작성된 실제 예제(AWS 공식 유저가이드의 Input 예시 등)를 우선 참고할 것 — REST API 레퍼런스의 바디 표기를 그대로 신뢰하면 안 된다.
+
+**검증 결과**: dev의 EKS 범용 노드그룹·RDS가 평일 09~21시 KST에만 가동되도록 스케줄 적용 완료. 나머지(컨트롤플레인·NAT·Valkey·ALB)는 상시 유지 — 이번 라운드에서 손대지 않음.

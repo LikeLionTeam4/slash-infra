@@ -98,6 +98,14 @@ resource "aws_eks_node_group" "general" {
 
   tags = var.tags
 
+  # schedule.tf의 EventBridge Scheduler가 UpdateNodegroupConfig로 desired/min/max를
+  # 09~21시 밖에는 0으로 바꿔놓는다 — 그 상태에서 terraform apply가 돌면 이 블록의
+  # 선언값(var.node_desired_size 등)으로 되돌리려는 drift가 감지되므로 무시한다.
+  # 사이즈를 실제로 바꾸려면 이 lifecycle 블록을 잠깐 지우고 apply해야 한다.
+  lifecycle {
+    ignore_changes = [scaling_config]
+  }
+
   depends_on = [
     aws_iam_role_policy_attachment.node_worker_policy,
     aws_iam_role_policy_attachment.node_cni_policy,

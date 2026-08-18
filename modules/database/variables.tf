@@ -77,3 +77,27 @@ variable "tags" {
   type        = map(string)
   default     = {}
 }
+
+variable "schedule_enabled" {
+  description = "true면 EventBridge Scheduler로 RDS를 지정 시간에만 띄운다(Valkey는 stop/start API가 없어 대상 아님)"
+  type        = bool
+  default     = true
+}
+
+variable "schedule_start_cron" {
+  description = "RDS를 시작하는 스케줄(schedule_timezone 기준). aws_scheduler_schedule cron 표현식"
+  type        = string
+  default     = "cron(0 9 ? * MON-FRI *)"
+}
+
+variable "schedule_stop_cron" {
+  description = "RDS를 정지하는 스케줄(schedule_timezone 기준). aws_scheduler_schedule cron 표현식"
+  type        = string
+  default     = "cron(0 21 ? * MON-FRI *)"
+}
+
+variable "schedule_timezone" {
+  description = "스케줄 cron을 해석할 타임존"
+  type        = string
+  default     = "Asia/Seoul"
+}
