@@ -62,7 +62,8 @@ flowchart TB
     end
 
     subgraph OBS["옵저버빌리티"]
-        CW["CloudWatch 알람\n(RDS CPU/스토리지)"]
+        CW["CloudWatch 알람 7개\n(RDS CPU/스토리지,\nALB 5xx/레이턴시,\nValkey CPU/메모리/eviction)"]
+        DASH["CloudWatch 대시보드\nslash-dashboard-dev"]
         SNS["SNS → 이메일"]
     end
 
@@ -79,7 +80,11 @@ flowchart TB
     ECR -.->|image pull| EKS
     APP -.-> S3EP
     DBTIER -.-> S3EP
-    RDS -.-> CW --> SNS
+    RDS -.-> CW
+    ALB -.-> CW
+    VALKEY -.-> CW
+    CW --> SNS
+    CW -.-> DASH
     R53 --> CF
     R53 --> ALB
 ```
@@ -319,10 +324,14 @@ sequenceDiagram
 
 Terraform 밖에서 별도로 작업할 필요는 없다 — AWS provider가 CloudWatch/CloudTrail 리소스를 그대로 지원하므로 다른 모듈과 동일하게 관리한다. **CloudTrail은 `environments/bootstrap`, CloudWatch 알람은 `modules/observability`(환경별)로 구현 완료** — 둘의 위치가 다른 이유는 아래 참고.
 
-- **CloudWatch** (`modules/observability`, PH-05 1차 조각)
-  - RDS CPU 사용률(80% 초과)·여유 스토리지(2GB 미만) 알람 2개 + 알림용 SNS 토픽. `alarm_email` 변수로 이메일 구독 선택 가능.
-  - **ALB 5xx 비율, GPU 노드 사용률 알람은 이번 조각에 없다** — ALB Ingress·GPU 노드그룹 자체가 아직 없어서(§8, §5) 감시할 대상이 없음. 그것들이 생기면 이 모듈에 추가.
-  - 애플리케이션 로그 그룹(`aws_cloudwatch_log_group`, 예: `/eks/slash-api-dev`)은 아직 안 만듦 — 실제로 로그를 그 그룹에 밀어넣으려면 Fluent Bit 같은 로그 수집 에이전트가 클러스터 안에서 돌아야 하는데, 그 설치는 ALB Controller/Karpenter와 같은 이유로 GitOps 몫이라 로그 그룹만 먼저 만들어봐야 실익이 적어 미룸.
+- **CloudWatch** (`modules/observability`)
+  - 알람 7개(2026-08-19, 이슈 #43) + 알림용 SNS 토픽. `alarm_email` 변수로 이메일 구독 선택 가능.
+    - RDS: CPU 사용률(80% 초과), 여유 스토리지(2GB 미만)
+    - ALB: 5xx 응답 수(5분당 10건 초과), 타깃 응답시간(평균 2초 초과) — ALB Ingress가 뜬(§8, §9-3) 뒤 추가
+    - Valkey: `EngineCPUUtilization`(80% 초과), `DatabaseMemoryUsagePercentage`(80% 초과), Eviction 발생(1건 이상)
+    - GPU 노드 사용률 알람은 여전히 없음 — GPU 노드그룹 자체를 안 만들기로 확정해서(§5-1) 대상이 없음
+  - **CloudWatch 대시보드**(`slash-dashboard-dev`, 2026-08-19, 이슈 #44) — 위 7개 알람을 `annotations.alarms`로 참조하는 위젯으로 묶어 한 화면에서 상태를 볼 수 있게 함(리소스 하나하나 콘솔/CLI로 따로 확인할 필요 없이 팀원이 대시보드 링크 하나만 열면 됨, `modules/observability`의 `dashboard_url` 출력값). EKS 지표는 없음 — Container Insights를 켜지 않으면 EKS는 CloudWatch에 기본 지표를 내보내지 않아서(RDS/ALB/ElastiCache와 달리 자동 발행이 아님), Container Insights 도입 여부가 결정되면 추가.
+  - 애플리케이션 로그 그룹(`aws_cloudwatch_log_group`, 예: `/eks/slash-api-dev`)과 EKS 컨트롤플레인 로그는 아직 없음 — 파드 로그 수집기(Fluent Bit/Container Insights) 도입 여부와 함께 이슈 #44에서 검토 중.
 - **CloudTrail** (`environments/bootstrap`)
   - 계정 전체 API 호출 감사용으로 트레일 1개(`aws_cloudtrail`)를 만들고, 로그는 전용 S3 버킷(버저닝 + 수명주기 정책, 잠정 90일 후 만료)에 적재.
   - **왜 환경별 모듈이 아니라 bootstrap에 두나**: CloudTrail은 계정 전체를 감사하는 거라 local/dev/prod가 각자 만들면 같은 계정 안에 트레일이 중복된다 — state 버킷·Route53 zone처럼 "계정당 한 번만" 만드는 자원이라 bootstrap이 자연스러운 자리. 반대로 CloudWatch 알람은 특정 환경의 RDS/EKS를 가리켜야 해서 환경별로 필요.
@@ -371,7 +380,8 @@ local/dev/prod 3단계로 나눈다. **결정(2026-08-12): 팀 전체가 계정 
 - ~~`slash-nlu`의 컴퓨트 요구사항~~ → **실측 완료(2026-08-13, `docs/operations-log.md` §10-2)**: GPU는 예상대로 불필요. 다만 Kiwi 형태소 사전 로딩 때문에 api/llm과 같은 128Mi/256Mi 기본값으론 `OOMKilled` — `helm/slash-nlu/values.yaml`을 384Mi/768Mi로 상향해 정상 기동 확인. 정확한 최소값은 아직 안 좁혀둠(넉넉히 잡은 값)
 - prod 환경의 네임스페이스 분리 vs 클러스터 분리 (§11) — **추천(2026-08-12): 클러스터 분리.** VPC·RDS·Cognito는 이미 dev/prod를 완전히 분리하기로 했는데 EKS 컨트롤플레인만 공유하면 일관성이 깨지고, dev의 실수(예: 2026-08-12에 겪은 orphan ALB류)가 prod 워크로드에 물리적으로 영향을 못 주게 격리하는 게 안전하다. 클러스터당 월 ~$75 추가 비용은 있지만 이미 dev용 클러스터를 별도로 두기로 한 시점에서 증분은 크지 않음
 - ~~Helm chart를 slash-infra 내부에 둘지, 별도 저장소로 분리할지~~ → **결정: `slash-infra` 내부(`helm/`)로 확정**(2026-08-11). Terraform이 만드는 IRSA Role ARN 등과 값이 맞물려 있어 같은 저장소/같은 PR로 바꾸는 게 안전하고, 지금 규모(단일 담당자, 남은 기간 짧음)에서 저장소를 나누는 비용이 더 크다고 판단. CI가 이미지 태그를 자주 커밋하기 시작해 git log가 지저분해지면 그때 분리 재검토
-- CloudTrail 로그 보관 기간(지금은 90일 잠정 기본값), CloudWatch 알람의 실제 임계값(지금은 CPU 80%/스토리지 2GB 잠정값) — 트래픽 실측 후 조정
-- ALB Ingress·GPU 노드그룹이 생기면 그 알람(5xx 비율, GPU 사용률)을 `modules/observability`에 추가
+- CloudTrail 로그 보관 기간(지금은 90일 잠정 기본값), CloudWatch 알람의 실제 임계값(지금은 잠정값) — 트래픽 실측 후 조정
+- ~~ALB Ingress가 생기면 그 알람(5xx 비율, 레이턴시)을 `modules/observability`에 추가~~ → **완료(2026-08-19, 이슈 #43)**, Valkey 알람도 같이 채움. GPU 사용률 알람은 GPU 노드그룹을 안 만들기로 확정(§5-1)해서 대상 없음
+- EKS 컨트롤플레인/파드 로그 수집 여부, Container Insights 도입 여부 — 비용 대비 효과 검토 중(이슈 #44)
 - `Owner` 태그를 지금부터 붙일지, 팀이 나뉘는 시점부터 붙일지
 - Valkey(ElastiCache) 정확한 노드 타입/개수 (§7-2, 캐시 대상 데이터와 세션 규모 확정 후)

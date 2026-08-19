@@ -717,4 +717,16 @@ dev가 상시운영으로 전환되며 `local/network`(모듈 검증용 기반�
 
 **비용**: 계정당 대시보드 3개까지 무료(월 50개 지표 포함)라 이번 1개 추가로는 비용 증가 없음.
 
-**검증**: `terraform fmt -recursive` 변경 없음, `terraform validate`(모듈 단독) 통과. 실제 apply는 아직 안 함 — 다음 라운드에서 `dev/observability` plan 확인 후 반영 예정.
+**검증 및 apply**: `terraform fmt -recursive` 변경 없음, `terraform validate`(모듈 단독) 통과. `dev/observability`에서 `terraform plan`으로 `1 to add, 0 to change, 0 to destroy` 확인 후 apply — 대시보드 `slash-dashboard-dev` 생성 완료, 위젯 7개(RDS 2 + ALB 2 + Valkey 3) 전부 정상 표시.
+
+`docs/aws-architecture.md` §1-1 구성도와 §10(옵저버빌리티), §13(TODO)도 이번 알람 확장(§13/이슈 #43)·대시보드 추가 반영해 실제 상태와 맞게 갱신 — 기존에 "ALB 5xx 알람은 없다"처럼 남아있던 stale 서술을 정정했다.
+
+## 16. Ollama keep_alive 콜드로드 완화 (이슈 #41, 2026-08-19)
+
+[이슈 #40](https://github.com/LikeLionTeam4/slash-infra/issues/40)에서 실측한 `/summary` 104.47초 지연(콜드로드) → 1.47초(웜) 재현 건의 원인 조치. [이슈 #41](https://github.com/LikeLionTeam4/slash-infra/issues/41)에 팀원(@YeonWoojuice)이 코멘트로 `OLLAMA_KEEP_ALIVE=-1`에 동의하면서 조건 두 가지를 남겼다: (1) `keep_alive`는 Infra 쪽 env var로만 관리하고 `slash-llm` 요청 payload에는 중복으로 넣지 말 것(API 값이 서버 env var보다 우선해서 운영값을 덮어쓸 수 있음), (2) `user_data.sh.tpl`은 최초 부팅 1회만 실행되므로 매일 EC2 stop/start로는 워밍업이 재실행되지 않는 문제를 systemd 서비스로 보완할 것.
+
+**`modules/llm-runtime/user_data.sh.tpl`**: `ollama.service.d/override.conf`에 `Environment="OLLAMA_KEEP_ALIVE=-1"` 추가(§ 기존 `OLLAMA_HOST` 옆). 전용 GPU 인스턴스(`gemma3:4b` 단독)라 VRAM을 나눠 쓸 다른 워크로드가 없어 무기한 유지해도 실질 단점이 없다는 이슈 배경 그대로. 추가로 `ollama-warmup.service`(oneshot, `After=ollama.service`)를 신규 등록해 `systemctl enable`— Ollama가 뜬 뒤 `/api/generate`에 `prompt` 없이 `model`만 담아 보내 모델을 VRAM에 올려두기만 하는 요청을 보낸다. `WantedBy=multi-user.target`이라 매 부팅(=매일 09시 EC2 재기동)마다 실행되어, `user_data`가 1회성이라는 제약을 우회한다.
+
+**`slash-llm` 확인**: `main.py`의 `ask_gemma()`가 `/api/generate`에 보내는 payload(`{"model", "prompt", "stream"}`)에 `keep_alive`가 이미 없는 것을 확인 — 팀원이 우려한 중복 설정 문제는 애초에 없어서 별도 수정 없음.
+
+**후속(이슈 체크리스트 남은 항목, 미완)**: `aws_instance.ollama`는 `user_data_replace_on_change`를 지정하지 않아 기본값(`false`) — 이 상태로 `terraform apply`만 하면 인스턴스의 user-data 속성만 갱신될 뿐 실행 중인 인스턴스에 재반영되지 않는다(stop/start로는 cloud-init이 다시 안 돎, 위 §5-1/§11 설계 그대로). dev EC2에 실제로 반영하려면 인스턴스 교체(`terraform apply -replace=module.llm-runtime.aws_instance.ollama`, 모델 재pull로 재기동 몇 분 소요)나 SSM 세션으로 override.conf/유닛 파일을 직접 패치하는 방법 중 하나가 필요 — 살아있는 dev 인스턴스에 영향을 주는 작업이라 다음 라운드에 사람 확인 후 적용. 그 후 `scripts/smoke_dev.py`로 "재기동 직후 첫 요청"·"5분 유휴 후 요청" 두 케이스 재검증, dev `LLM_TIMEOUT`을 Backend 60초보다 짧게 조정하는 후속 조치가 남아있다.
