@@ -9,6 +9,11 @@
 # 월 ~$440~475로 추정된다. 예전 $100은 local/dev를 apply→destroy로 짧게 돌리던
 # 시절 기준값이라 상시운영 baseline만으로도 이미 초과 — $500으로 상향, 변동비(NAT
 # 데이터 처리, 다른 팀원의 local 실험 등) 여유를 감안했다. prod가 생기면 다시 재산정.
+#
+# 후속(같은 날 오후, PR #36): Ollama EC2가 Spot 용량 부족으로 On-Demand로 재전환되며
+# GPU 비용이 월 ~$60~85 -> ~$170로 올라 실제 baseline은 위 추정(~$440~475)보다 높다
+# (~$550~560 안팎 추정) — $500 한도를 넘을 수 있다. 한도는 이번엔 다시 안 건드림
+# (docs/operations-log.md §11-5, 비용 재산정은 낮은 우선순위로 보류 확인).
 
 resource "aws_budgets_budget" "monthly_cost" {
   name         = "slash-monthly-cost"

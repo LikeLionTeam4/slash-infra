@@ -38,7 +38,7 @@ Apply는 이 표의 순서대로, **Destroy는 반대 순서**로 진행한다. 
 | `environments/dev/database` | 10 | `rds_endpoint = slash-rds-dev.c3qme6c6e7fj.ap-northeast-2.rds.amazonaws.com:5432`, `valkey_endpoint = master.slash-valkey-dev.2iapp0.apn2.cache.amazonaws.com` | 적용됨(2026-08-18), RDS Multi-AZ. **주의**: 시크릿 이름(`rds!db-*`, `slash/valkey/dev`)은 재apply마다 바뀔 수 있음(§11-2 트러블슈팅) — 상시운영이면 더 이상 안 바뀔 것. RDS는 평일 09~21시 KST만 EventBridge Scheduler로 가동(§12), Valkey는 stop/start API가 없어 상시 유지 |
 | `environments/dev/eks` | 24 | `cluster_name = slash-eks-dev`, `api_certificate_arn`(ACM, ISSUED), `slash_api_role_arn = arn:aws:iam::061039804626:role/slash-slash-api-dev` | 적용됨(2026-08-18). ArgoCD(polling 60s, 이슈 #15)/ALB Controller/Karpenter 1.10.0/metrics-server/External Secrets Operator 전부 정상. `argocd/applications-dev/` 3개 전부 **Healthy**(slash-api도 이슈 #23 해소 후 정상 기동). `api.dev.sbsh.cloud` A레코드 연결(§11-7) 포함. 범용 노드그룹은 평일 09~21시 KST만 EventBridge Scheduler로 가동(§12), 컨트롤플레인은 stop 개념이 없어 상시 유지 |
 | `environments/dev/observability` | 3 | `sns_topic_arn = arn:aws:sns:ap-northeast-2:061039804626:slash-alarms-dev` | 적용됨(2026-08-18) |
-| `environments/dev/llm-runtime` | 4 | `ollama_private_ip = 10.8.11.201`(Spot, `ap-northeast-2c`) | 적용됨(2026-08-18). Spot 전환 중 `ap-northeast-2a` 용량 부족으로 2c로 재생성(§11-5) — 평일 09~21시 KST만 EventBridge Scheduler로 가동 |
+| `environments/dev/llm-runtime` | 4 | `ollama_private_ip = 10.8.11.172`(On-Demand, `ap-northeast-2c`) | 적용됨(2026-08-18). Spot 전환 중 두 AZ(2a/2c) 모두 `g4dn.xlarge` 용량 부족을 겪어 같은 날 On-Demand로 재전환(§11-5) — 평일 09~21시 KST만 EventBridge Scheduler로 가동 |
 | `environments/dev/frontend` | 12 | `site_url = https://dev.sbsh.cloud`, `bucket_name = slash-web-dev-061039804626`, `cloudfront_distribution_id = E3509V383MY8KA` | 적용됨(2026-08-18, §11-7). slash-web `deploy-dev.yml` merge → 실배포 → 브라우저로 로그인 리다이렉트까지 왕복 확인 |
 | `environments/prod/*` | – | – | 미구축 |
 
@@ -581,6 +581,7 @@ slash-llm PR(LikeLionTeam4/slash-llm#5)로 `/health`(liveness)·`/ready`(readine
 - **결정**: Ollama EC2를 Spot(월 ~$60~85로 절감) + 평일 09~21시 KST만 가동으로 전환(PR #28). Lambda 없이 EventBridge Scheduler가 EC2 API(`StartInstances`/`StopInstances`)를 직접 호출 — 불필요한 컴포넌트를 안 늘리는 기존 원칙과 같은 방향. `instance_interruption_behavior=stop`이라 AWS가 용량을 회수해도 터미네이트가 아니라 정지, EBS의 모델 설치 상태 보존.
 - **트러블슈팅**: Spot 전환은 `aws_instance`의 `instance_market_options`가 ForceNew라 인스턴스 재생성이 필요했는데, 재생성 중 `ap-northeast-2a`에서 g4dn.xlarge `Server.InsufficientInstanceCapacity` 실제 발생(CloudTrail로 재시도 5회 전부 실패 확인, AWS provider가 자동 재시도하느라 겉으로는 "Still creating..."만 계속 찍혀서 원인 파악에 시간이 걸림) — AWS 에러 메시지가 권장한 대로 서브넷을 `ap-northeast-2c`로 고정해서 해결. 재생성으로 사설 IP도 바뀌어(`helm/slash-llm/values-dev.yaml`) 갱신, SSM으로 `gemma3:4b` 재pull 완료 확인 후 반영.
 - **Budgets**: 재산정 결과(baseline+GPU Spot·스케줄 ≈ 월 $440~475) 기준 $100 → $500으로 상향(PR #29).
+- **번복(같은 날 오후, PR #36)**: 스케줄까지 붙인 뒤 재생성 과정에서 `ap-northeast-2c`마저 같은 `Server.InsufficientInstanceCapacity`를 겪어(재시도 2회 전부 실패) 하루 안에 두 AZ 모두에서 Spot 용량 부족을 확인 — Spot이 주는 추가 절감(월 ~$60~85 vs On-Demand 스케줄 월 ~$170)보다 "업무시간에 못 켜질 수 있다"는 위험이 dev 팀 사용성에 더 크다고 판단해 `use_spot = false`로 On-Demand 재전환. 인스턴스 재교체로 사설 IP도 다시 바뀜(`10.8.11.201` → `10.8.11.172`, `helm/slash-llm/values-dev.yaml` 갱신). **최종 상태: dev의 Ollama EC2는 On-Demand.**
 
 ### 11-6. ArgoCD webhook 대신 폴링 주기 단축 (이슈 #15, 같은 날)
 

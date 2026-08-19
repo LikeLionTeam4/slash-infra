@@ -349,13 +349,13 @@ local/dev/prod 3단계로 나눈다. **결정(2026-08-12): 팀 전체가 계정 
 예산에 영향이 큰 순서대로:
 
 1. **EKS 컨트롤플레인 고정비** — 클러스터당 시간당 과금, 환경을 늘릴수록 누적.
-2. **LLM 런타임 EC2(`g4dn.xlarge`, §5-1)** — GPU 인스턴스라 시간당 비용이 큼(On-demand ~$0.65/h, Spot ~$0.22~0.33/h, ap-northeast-2 기준). 상시 가동은 월 $100 예산과 충돌해 stop/start 스케줄로 운용한다.
+2. **LLM 런타임 EC2(`g4dn.xlarge`, §5-1)** — GPU 인스턴스라 시간당 비용이 큼(On-demand ~$0.65/h, ap-northeast-2 기준). 스케줄 도입 초기엔 Spot(~$0.22~0.33/h)도 시도했지만 하루 안에 두 AZ 모두에서 용량 부족을 겪어 On-Demand로 확정했다(`docs/operations-log.md` §11-5) — 상시 가동 대신 평일 09~21시 stop/start 스케줄로 운용한다.
 3. **NAT Gateway** — dev/prod는 AZ당 1개(§4)라 시간당 과금 + 데이터 처리 비용이 2배로 발생. local은 1개로 아낀다. S3 접근은 Gateway Endpoint(§4-1)로 우회해 데이터 처리 비용 일부는 줄인다.
 4. **RDS Multi-AZ** — dev/prod는 활성화(§7-1)라 인스턴스 비용이 2배로 발생 — 기존 "prod만 Multi-AZ" 가정에서 변경됨.
 5. **Valkey(ElastiCache)** — RDS와 별개로 상시 과금되는 노드. 최소 타입으로 시작해도 24시간 켜져 있는 비용이 누적됨.
 6. **CloudTrail/CloudWatch/VPC Flow Log 보관** — 보관 기간이 길어지거나 로그량이 많아지면 S3/CloudWatch Logs 비용이 누적되므로 수명주기 정책으로 관리.
 
-**안전망**: `environments/bootstrap`의 `aws_budgets_budget.monthly_cost`(2026-08-12 apply)가 `Project=slash` 태그 기준 월 $100 한도로 실지출 80%/100%·예상지출 100% 시 이메일 알림을 보낸다(계정을 다른 팀과 공유하고 있어서 태그로 스코핑, `docs/operations-log.md` §8-3 참고). $100은 시작값이라 사용 패턴이 바뀌면(dev 상시 운영, prod 착수 등) 조정 필요.
+**안전망**: `environments/bootstrap`의 `aws_budgets_budget.monthly_cost`가 `Project=slash` 태그 기준 월 $500 한도(2026-08-18 dev 상시운영 재산정으로 $100 → $500 상향, `docs/operations-log.md` §11-5)로 실지출 80%/100%·예상지출 100% 시 이메일 알림을 보낸다(계정을 다른 팀과 공유하고 있어서 태그로 스코핑). prod 착수 등 사용 패턴이 또 바뀌면 재조정 필요.
 
 ## 13. 미결정 사항 / TODO
 
