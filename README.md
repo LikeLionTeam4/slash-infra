@@ -107,6 +107,42 @@ terraform {
 다른 계정/사용자를 쓰기로 하면 프로필 값만 바꾸면 된다. 사용 시 `--profile slash-local` 또는
 `AWS_PROFILE=slash-local`로 지정.
 
+## dev 클러스터 상태 확인 (Headlamp)
+
+리소스 하나하나 AWS 콘솔에서 찾아보지 않고 EKS 파드 상태를 한눈에 보려면 [Headlamp](https://headlamp.dev) 데스크톱 앱을 쓴다(검토 배경: 이슈 [#47](https://github.com/LikeLionTeam4/slash-infra/issues/47)/[#49](https://github.com/LikeLionTeam4/slash-infra/issues/49)). 클러스터에 아무것도 추가로 설치하지 않는 방식이라 비용은 $0.
+
+### 설치 및 연결
+
+```bash
+brew install --cask headlamp
+aws eks update-kubeconfig --name slash-eks-dev --region ap-northeast-2 --profile slash-dev
+```
+
+앱을 열고 `slash-eks-dev`(계정 `061039804626`)를 선택하면 연결된다. 같은 이름인데 계정이
+`727646470302`인 항목이 보이면 무시하거나 `kubectl config delete-context <이름>`으로 지운다 —
+부트캠프 계정 재발급([이슈 #21](https://github.com/LikeLionTeam4/slash-infra/issues/21)) 이전
+kubeconfig 흔적이다.
+
+### 보는 법
+
+**워크로드 → 디플로이먼트**에서 파드 수(`N/M`)만 확인한다 — N=M이면 정상.
+
+| 서비스 | 정상 값 |
+| --- | --- |
+| slash-api | 2/2 |
+| slash-nlu | 2/2 |
+| slash-llm | 1/1 |
+
+숫자가 다르면: 해당 디플로이먼트 클릭 → 파드 목록에서 `Running`이 아닌 파드 클릭 → 로그/Events로
+원인 확인. **ReplicaSet 목록은 안 봐도 된다** — 배포할 때마다 쌓이는 이력이라 대부분 `0/0`이 정상이다.
+
+### 참고
+
+- 계정을 팀 전체가 공유하는 구조라(위 §AWS CLI 프로필) 별도 로그인·OIDC·RBAC 설정 없이 바로
+  접속된다 — 검토 결과는 이슈 #49 참고.
+- 관리형 AWS 서비스(RDS/ALB/Valkey) 상태는 별도 CloudWatch 대시보드에서 확인한다:
+  `environments/dev/observability`에서 `terraform output dashboard_url`.
+
 ## 다른 AWS 계정에서 시작하기 (팀원용)
 
 부트캠프 계정은 사람마다 따로 발급되므로, 팀원이 이 저장소를 clone해서 apply하면 사실상
