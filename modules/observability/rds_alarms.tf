@@ -1,5 +1,7 @@
-# 문서(§10)가 "최소한 먼저" 붙이라고 한 핵심 알람 중 RDS 2개. ALB 5xx 비율은 ALB
-# Ingress가, GPU 노드 사용률은 GPU 노드그룹이 아직 없어서 그것들이 생기면 추가한다.
+# 문서(§10)가 "최소한 먼저" 붙이라고 한 핵심 알람 중 RDS 2개. ALB 5xx/레이턴시는
+# ALB Ingress가 실제로 뜬 뒤 alb_alarms.tf로, Valkey는 valkey_alarms.tf로 각각 추가됨
+# (2026-08-19). GPU 노드 사용률은 GPU 노드그룹 자체가 아직 없어서(llm-runtime은 별도
+# EC2 방식) 그게 생기면 추가한다.
 
 resource "aws_cloudwatch_metric_alarm" "rds_cpu" {
   alarm_name          = "${var.name_prefix}-rds-cpu-${var.environment}"

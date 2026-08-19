@@ -10,7 +10,7 @@ Apply는 이 표의 순서대로, **Destroy는 반대 순서**로 진행한다. 
 
 | # | 환경 / 모듈 | 구현 | Apply 조건 (뭐가 있어야 되는지) | Destroy 시 주의사항 |
 | --- | --- | --- | --- | --- |
-| 1 | `environments/bootstrap` (state+DNS+**CloudTrail**) | ✅ 적용됨(state+DNS) / **CloudTrail만 코드 완료, 미적용** | 없음 — 가장 먼저 | **가장 마지막에.** `prevent_destroy` 코드에서 제거해야 destroy 가능(§5-5). zone 지우면 `sbsh.cloud` DNS 전체가 끊김 |
+| 1 | `environments/bootstrap` (state+DNS+**CloudTrail**) | ✅ 적용됨(state+DNS+CloudTrail 전체) — 2026-08-19 `terraform state`로 재확인, 별도 apply 이력 기록 없이 상시운영 전환(§11) 과정에서 함께 적용된 것으로 보임 | 없음 — 가장 먼저 | **가장 마지막에.** `prevent_destroy` 코드에서 제거해야 destroy 가능(§5-5). zone 지우면 `sbsh.cloud` DNS 전체가 끊김. CloudTrail 로그 버킷은 버저닝돼 있어 destroy 시 §4 "force_destroy 없는 버킷" 트러블슈팅 그대로 적용됨 |
 | 2 | `environments/local/network` | ✅ 적용됨 | 없음 — 1번과 순서 무관, 독립적 | 4·5번(database/eks)**보다 나중에** 지워야 함(§5-3, §5-4) |
 | 3 | `environments/local/frontend` (+ `modules/frontend-cicd` 배포 Role) | ✅ 적용됨 | 1번의 `hosted_zone_id` 필요 | **가장 먼저.** zone 안에 이 모듈이 만든 레코드가 있어서(§5-1) — `force_destroy=true`라 버킷 비우기는 불필요. CI Role은 이 환경 destroy 시 같이 지워짐(별도 조치 불필요) |
 | 4 | RDS + Valkey + Secrets Manager | ✅ 코드 완료, **apply→검증→destroy 완료(현재는 미적용)** | 2번의 `private_db_subnet_ids`, `db_security_group_id` 필요 | 2번(network)**보다 먼저** 지워야 함(서브넷/SG 참조). local은 `deletion_protection=false`+`skip_final_snapshot=true`라 바로 destroy 가능 |
@@ -28,7 +28,7 @@ Apply는 이 표의 순서대로, **Destroy는 반대 순서**로 진행한다. 
 
 | 환경 | 리소스 수 | 핵심 output | 상태 |
 | --- | --- | --- | --- |
-| `environments/bootstrap` | 17 | `route53_zone_id = Z02458772F0ED1QG30X6D`, `bucket_name = slash-tfstate-061039804626`, `ecr_repository_urls = {slash-api, slash-nlu, slash-llm}`, `backend_cicd_role_arns = {api, nlu, llm}` | 적용됨(새 계정, §3 2026-08-13 계정 재발급 항목 참고). ECR 3+lifecycle policy 3을 `local/eks`에서 이전(2026-08-12, §6), 백엔드 CI용 IAM Role 3개(`modules/backend-cicd`) |
+| `environments/bootstrap` | 36 | `route53_zone_id = Z02458772F0ED1QG30X6D`, `bucket_name = slash-tfstate-061039804626`, `ecr_repository_urls = {slash-api, slash-nlu, slash-llm}`, `backend_cicd_role_arns = {api, nlu, llm}`, `cloudtrail_arn = arn:aws:cloudtrail:ap-northeast-2:061039804626:trail/slash-trail`, `cloudtrail_bucket_name = slash-cloudtrail-061039804626` | 적용됨(새 계정, §3 2026-08-13 계정 재발급 항목 참고). ECR 3+lifecycle policy 3을 `local/eks`에서 이전(2026-08-12, §6), 백엔드 CI용 IAM Role 3개(`modules/backend-cicd`). **CloudTrail도 적용된 상태**(2026-08-19 확인, §1 참고) — 단일 리전 트레일, S3에만 적재 중이고 CloudWatch Logs/Athena/GuardDuty 등 분석 연동은 아직 없음 |
 | `environments/local/network` | 0 | – | **미적용(2026-08-18 destroy, §11-8)** — dev가 상시운영으로 전환되며 local의 module-검증 목적이 dev로 흡수됨. flow-log 버킷에 버전 3301개 쌓여있어 `delete-objects`로 먼저 비운 뒤 destroy |
 | `environments/local/frontend` | 0 | – | **미적용(2026-08-18 destroy)** — dev.sbsh.cloud가 생기면서 역할 완전히 흡수(§11-7) |
 | `environments/local/cognito` | 0 | – | **미적용(2026-08-18 destroy)** — dev Cognito(`ap-northeast-2_kiW46VZ9O`)로 흡수 |
@@ -37,7 +37,7 @@ Apply는 이 표의 순서대로, **Destroy는 반대 순서**로 진행한다. 
 | `environments/dev/cognito` | 4 | `user_pool_id = ap-northeast-2_kiW46VZ9O` | 적용됨, 상시 유지(2026-08-18). slash-web dev(§11-7)도 이 값을 그대로 씀 |
 | `environments/dev/database` | 10 | `rds_endpoint = slash-rds-dev.c3qme6c6e7fj.ap-northeast-2.rds.amazonaws.com:5432`, `valkey_endpoint = master.slash-valkey-dev.2iapp0.apn2.cache.amazonaws.com` | 적용됨(2026-08-18), RDS Multi-AZ. **주의**: 시크릿 이름(`rds!db-*`, `slash/valkey/dev`)은 재apply마다 바뀔 수 있음(§11-2 트러블슈팅) — 상시운영이면 더 이상 안 바뀔 것. RDS는 평일 09~21시 KST만 EventBridge Scheduler로 가동(§12), Valkey는 stop/start API가 없어 상시 유지 |
 | `environments/dev/eks` | 24 | `cluster_name = slash-eks-dev`, `api_certificate_arn`(ACM, ISSUED), `slash_api_role_arn = arn:aws:iam::061039804626:role/slash-slash-api-dev` | 적용됨(2026-08-18). ArgoCD(polling 60s, 이슈 #15)/ALB Controller/Karpenter 1.10.0/metrics-server/External Secrets Operator 전부 정상. `argocd/applications-dev/` 3개 전부 **Healthy**(slash-api도 이슈 #23 해소 후 정상 기동). `api.dev.sbsh.cloud` A레코드 연결(§11-7) 포함. 범용 노드그룹은 평일 09~21시 KST만 EventBridge Scheduler로 가동(§12), 컨트롤플레인은 stop 개념이 없어 상시 유지 |
-| `environments/dev/observability` | 3 | `sns_topic_arn = arn:aws:sns:ap-northeast-2:061039804626:slash-alarms-dev` | 적용됨(2026-08-18) |
+| `environments/dev/observability` | 8 | `sns_topic_arn = arn:aws:sns:ap-northeast-2:061039804626:slash-alarms-dev` | 적용됨. RDS CPU/스토리지(2026-08-18) + ALB 5xx/레이턴시·Valkey CPU/메모리/eviction 5개(2026-08-19, §13) — GPU 노드그룹 알람만 보류 중(해당 리소스 자체가 없음) |
 | `environments/dev/llm-runtime` | 4 | `ollama_private_ip = 10.8.11.172`(On-Demand, `ap-northeast-2c`) | 적용됨(2026-08-18). Spot 전환 중 두 AZ(2a/2c) 모두 `g4dn.xlarge` 용량 부족을 겪어 같은 날 On-Demand로 재전환(§11-5) — 평일 09~21시 KST만 EventBridge Scheduler로 가동 |
 | `environments/dev/frontend` | 12 | `site_url = https://dev.sbsh.cloud`, `bucket_name = slash-web-dev-061039804626`, `cloudfront_distribution_id = E3509V383MY8KA` | 적용됨(2026-08-18, §11-7). slash-web `deploy-dev.yml` merge → 실배포 → 브라우저로 로그인 리다이렉트까지 왕복 확인 |
 | `environments/prod/*` | – | – | 미구축 |
@@ -672,3 +672,35 @@ dev가 상시운영으로 전환되며 `local/network`(모듈 검증용 기반�
 - **교훈**: universal target을 새 서비스에 처음 쓸 때는 공식 API 문서만 믿지 말고, 가능하면 먼저 `plan`이 아니라 실제 `apply`로 한 번 검증하거나(에러 메시지가 정확한 필드명을 알려준다) 그 서비스로 이미 작성된 실제 예제(AWS 공식 유저가이드의 Input 예시 등)를 우선 참고할 것 — REST API 레퍼런스의 바디 표기를 그대로 신뢰하면 안 된다.
 
 **검증 결과**: dev의 EKS 범용 노드그룹·RDS가 평일 09~21시 KST에만 가동되도록 스케줄 적용 완료. 나머지(컨트롤플레인·NAT·Valkey·ALB)는 상시 유지 — 이번 라운드에서 손대지 않음.
+
+## 13. CloudWatch 알람 확장(ALB/Valkey) + CloudTrail 문서 정정 (2026-08-19)
+
+사용자 질문 두 가지를 계기로 진행: ① CloudTrail/CloudWatch가 실제로 적용돼 있는지 점검, ② 현재 진행 상황(ALB·ArgoCD 3서비스 상시운영 전환, §11)에 맞춰 CloudWatch 세팅도 맞출 것.
+
+**점검 결과 — 문서-실제 상태 불일치 발견**: `terraform state list`로 재확인해보니 `environments/bootstrap`의 CloudTrail이 실제로는 **적용된 상태**였다. §1 표와 §2 bootstrap 행이 옛날("코드 완료, 미적용") 상태 그대로 남아있었던 것 — 정확히 언제 재apply됐는지 짚어주는 Apply 이력 항목이 없어(§11 상시운영 전환 어딘가에서 같이 됐을 것으로 추정) 확인 시점 기준으로만 §1·§2를 정정했다. CloudTrail은 단일 리전 트레일 + S3 저장까지만 되어 있고, CloudWatch Logs/Athena/GuardDuty 등 로그를 실제로 분석하는 연동은 아직 없음 — 필요해지면 별도 후속.
+
+**CloudWatch 알람 확장**: `modules/observability/rds_alarms.tf` 주석이 "ALB 생기면, GPU 노드그룹 생기면 알람 추가"라고 미뤄뒀던 조건 중 ALB가 이제 충족됐다(§11-7, `api.dev.sbsh.cloud` 연결 완료). RDS와 대칭이 안 맞던 Valkey(ElastiCache) 알람도 이번에 같이 채움. GPU 알람은 여전히 보류(GPU 노드그룹 자체가 없음 — llm-runtime은 별도 EC2 방식, §10).
+
+- **`modules/observability/alb_alarms.tf`(신규)**: `alb_5xx`(`HTTPCode_Target_5XX_Count` 합계 5분당 10건 초과), `alb_target_response_time`(`TargetResponseTime` 평균 2초 초과, 3회 연속). `alb_arn_suffix` 변수가 `null`이면 `count=0`으로 알람을 안 만들게 해서 ALB 없는 환경(local 등)에서도 모듈을 그대로 재사용 가능.
+- **`modules/observability/valkey_alarms.tf`(신규)**: `valkey_cpu`(`EngineCPUUtilization` 80% 초과 — `CPUUtilization` 대신 AWS 권고대로 엔진 부하를 더 정확히 반영하는 메트릭 사용), `valkey_memory`(`DatabaseMemoryUsagePercentage` 80% 초과), `valkey_evictions`(`Evictions` 5분당 1건 이상). 마찬가지로 `valkey_cache_cluster_id`가 `null`이면 생성 안 함.
+- **ALB 대상을 이름이 아니라 태그로 조회**: AWS Load Balancer Controller가 `group.name`을 안 써서(`helm/slash-api/templates/ingress.yaml`) Ingress마다 전용 ALB가 뜨고 이름이 자동 생성돼 재생성 시 바뀔 수 있다. `environments/dev/observability/main.tf`에서 `data "aws_lb"`를 이름이 아니라 컨트롤러가 항상 붙이는 태그(`elbv2.k8s.aws/cluster`, `ingress.k8s.aws/stack=default/slash-api`)로 조회하도록 함 — 실제 ALB(`aws elbv2 describe-tags`)에서 이 태그값을 먼저 확인한 뒤 반영. **주의**: Ingress가 잠깐이라도 내려가 ALB가 사라진 상태로 apply하면 이 data source가 실패한다.
+- **`modules/database/outputs.tf` + `environments/dev/database/outputs.tf`**: `valkey_replication_group_id` output 추가(기존엔 없었음) — Valkey는 단일 노드 replication group이라 실제 `CacheClusterId`는 `<replication_group_id>-001`(`aws elasticache describe-cache-clusters`로 확인 후 반영).
+
+**Apply 순서**: `dev/database`(output만 추가, `0 added/changed/destroyed`) → `dev/observability`(`terraform plan`으로 정확히 `5 to add, 0 to change, 0 to destroy` 확인 후 그 plan 파일로 apply, 기존 RDS 알람 2개는 그대로 유지). `aws cloudwatch describe-alarms`로 7개 전부(RDS 2개는 `OK`, 신규 5개는 데이터 누적 전이라 `INSUFFICIENT_DATA`) 정상 생성 확인.
+
+### 13-1. 후속 이슈 등록 (같은 날)
+
+이번 라운드에서 다루지 않은 관찰 사항 중 후속 검토가 필요한 두 가지를 이슈로 이월했다:
+
+- [이슈 #43](https://github.com/LikeLionTeam4/slash-infra/issues/43) — CloudTrail이 S3에 로그만 쌓고 분석 경로가 없는 상태를 CloudWatch Logs 연동 + 메트릭 필터로 메울지 검토. 공유 계정 특성상 필터가 다른 팀 활동까지 잡을 수 있다는 점을 배경에 명시.
+- [이슈 #44](https://github.com/LikeLionTeam4/slash-infra/issues/44) — EKS 컨트롤플레인 로그·컨테이너 로그·CloudWatch Dashboard가 전부 비어있는 상태를 검토. 이슈 #39(장애 대응 시나리오 점검)의 "사후 분석 근거 부재" 문제와 맞닿아 있어 상호 참조.
+
+**llm-runtime EC2(Ollama) 상태 체크 알람은 이슈로 남기지 않기로 판단**: 평일 09~21시 스케줄(§11-5/§12) 밖에서는 정상적으로 꺼져 있는 상태라 상태 체크 알람을 걸면 매일 밤 오탐 처리 로직이 별도로 필요하고, "스케줄 기동 자체가 실패했을 때 감지할 방법이 없다"는 더 근본적인 문제는 이미 이슈 #39의 할 일 목록("EventBridge 09시 자동 기동 실패 대비 런북")이 다루고 있어 중복 이슈를 만들지 않음.
+
+## 14. slash-api values-dev.yaml에 LLM_BASE_URL 배선 (이슈 #42, 2026-08-19)
+
+`slash-api` 담당자(김강찬)가 등록한 [이슈 #42](https://github.com/LikeLionTeam4/slash-infra/issues/42) 대응. `slash-api` PR#42(`TEXT_SUMMARY`를 slash-llm에 연결)에서 `LLM_BASE_URL` 설정이 새로 생겼는데, `helm/slash-api/values-dev.yaml`의 `env`에는 `NLU_BASE_URL`만 있고 `LLM_BASE_URL`이 없었다 — 기본값(`localhost:8000`)으로 배포되면 요약 요청이 `UPSTREAM_UNAVAILABLE`로 조용히 실패하는 상태.
+
+**조치**: `NLU_BASE_URL: "http://slash-nlu"`와 동일 패턴으로 `LLM_BASE_URL: "http://slash-llm"` 추가. `argocd/applications-dev/slash-llm.yaml`이 release 이름을 `slash-llm`으로 쓰고 있어 chart fullname도 `slash-llm`(slash-nlu와 동일 패턴)임을 확인했고, `helm/slash-llm/values.yaml`의 `service.port: 80`→`targetPort: 8000`이라 주입값에는 포트를 안 붙인다.
+
+**후속(이슈 체크리스트 남은 항목)**: slash-api#42 머지·배포 후 실제 `/summary` 왕복 확인은 아직 미완 — infra 쪽 배선만 이번에 반영.

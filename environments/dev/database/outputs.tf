@@ -18,6 +18,10 @@ output "valkey_endpoint" {
   value = module.database.valkey_endpoint
 }
 
+output "valkey_replication_group_id" {
+  value = module.database.valkey_replication_group_id
+}
+
 output "valkey_secret_arn" {
   value = module.database.valkey_secret_arn
 }

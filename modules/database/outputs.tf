@@ -21,6 +21,11 @@ output "valkey_endpoint" {
   value = aws_elasticache_replication_group.main.primary_endpoint_address
 }
 
+output "valkey_replication_group_id" {
+  description = "CloudWatch 알람의 CacheClusterId 차원 구성에 쓰는 식별자. 단일 노드 replication group이라 실제 노드 ID는 이 값에 -001이 붙는다"
+  value       = aws_elasticache_replication_group.main.replication_group_id
+}
+
 output "valkey_secret_arn" {
   description = "Valkey 엔드포인트+AUTH 토큰이 담긴 Secrets Manager ARN"
   value       = aws_secretsmanager_secret.valkey.arn

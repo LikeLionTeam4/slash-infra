@@ -31,6 +31,46 @@ variable "alarm_email" {
   default     = null
 }
 
+variable "alb_arn_suffix" {
+  description = "ALB 5xx/레이턴시 알람이 감시할 대상(aws_lb의 arn_suffix, 예: app/<name>/<id>). null이면 알람을 만들지 않는다 — ALB Ingress가 없는 환경(local 등)을 위한 옵션"
+  type        = string
+  default     = null
+}
+
+variable "alb_5xx_threshold_count" {
+  description = "5분간 타깃 5xx 응답 수가 이 값을 넘으면 알람"
+  type        = number
+  default     = 10
+}
+
+variable "alb_target_response_time_threshold_seconds" {
+  type    = number
+  default = 2
+}
+
+variable "valkey_cache_cluster_id" {
+  description = "Valkey CPU/메모리/eviction 알람이 감시할 대상(CacheClusterId). null이면 알람을 만들지 않는다"
+  type        = string
+  default     = null
+}
+
+variable "valkey_cpu_threshold_percent" {
+  description = "EngineCPUUtilization 임계값 (CPUUtilization 대신 이 메트릭을 쓰는 이유는 valkey_alarms.tf 참고)"
+  type        = number
+  default     = 80
+}
+
+variable "valkey_memory_threshold_percent" {
+  type    = number
+  default = 80
+}
+
+variable "valkey_evictions_threshold_count" {
+  description = "5분간 eviction 발생 건수가 이 값을 넘으면 알람 (기본 0 — 정상적으로는 발생하면 안 되는 상황)"
+  type        = number
+  default     = 0
+}
+
 variable "tags" {
   description = "모든 리소스에 붙일 공통 태그"
   type        = map(string)
