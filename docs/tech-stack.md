@@ -2,7 +2,7 @@
 
 `docs/aws-architecture.md`가 AWS 리소스 토폴로지를, `docs/user-flow.md`가 요청 단위 흐름을
 다룬다면, 이 문서는 "각 컴포넌트가 실제로 어떤 언어/프레임워크/라이브러리로 만들어졌는가"를
-정리한다. 기준: 각 서비스 저장소(`slash-web`/`slash-api`/`slash-nlu`/`slash-llm`/`slash-agent`)를
+정리한다. 기준: 각 서비스 저장소(`slash-web`/`slash-api`/`slash-nlu`/`slash-llm`/`slash-runner`, 구 `slash-agent`)를
 로컬 clone에서 직접 확인(2026-08-19) — `package.json`/`build.gradle.kts`/`requirements*.txt`/
 `*.egg-info` 기준.
 
@@ -10,7 +10,7 @@
 flowchart TB
     subgraph CLIENT["클라이언트"]
         WEB["slash-web\nReact 19 + TypeScript + Vite 8\nTailwindCSS 4, react-router 8\noidc-client-ts (Cognito PKCE)"]
-        AGENT["slash-agent (사용자 PC, 로컬)\nPython\nwebsockets(WSS 클라이언트), pystray + pywebview(트레이/UI)\nwatchdog(파일감시), keyring, cryptography\nPyInstaller 패키징"]
+        AGENT["slash-runner (사용자 PC, 로컬)\nPython\nwebsockets(WSS 클라이언트), pystray + pywebview(트레이/UI)\nwatchdog(파일감시), keyring, cryptography\nPyInstaller 패키징"]
     end
 
     subgraph APP["애플리케이션 레이어 (EKS, ArgoCD GitOps)"]
@@ -65,7 +65,7 @@ flowchart TB
 | `slash-api` | Java 21 | Spring Boot 3.5.9 (Web/Validation/Actuator/Security/OAuth2 Resource Server/WebSocket/Data Redis), jOOQ, Flyway | 컨테이너 → EKS (Helm, ArgoCD) |
 | `slash-nlu` | Python | FastAPI, Pydantic, `kiwipiepy`, uvicorn | 컨테이너 → EKS (Helm, ArgoCD) |
 | `slash-llm` | Python | FastAPI, Pydantic, `httpx`, uvicorn | 컨테이너 → EKS (Helm, ArgoCD) |
-| `slash-agent` | Python | `websockets`, `pystray`, `pywebview`, `watchdog`, `keyring`, `cryptography` | PyInstaller 패키징, 사용자 PC에서 로컬 실행(AWS 범위 밖) |
+| `slash-runner`(구 `slash-agent`) | Python | `websockets`, `pystray`, `pywebview`, `watchdog`, `keyring`, `cryptography` | PyInstaller 패키징, 사용자 PC에서 로컬 실행(AWS 범위 밖) |
 | Ollama | — | `gemma3:4b` | EC2(`g4dn.xlarge`, GPU) 단독 설치, EKS 밖 |
 
 ## 확인된 사실 vs 설계뿐인 것

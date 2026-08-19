@@ -22,14 +22,14 @@ flowchart LR
     LLM --> OLLAMA["Ollama\nEC2 10.8.11.172:11434\n(private-app 서브넷)"]
     API <--> RDS[("RDS PostgreSQL\nprivate-db")]
     API <--> VALKEY[("Valkey\nprivate-db")]
-    AGENT["slash-agent\n(사용자 PC, 로컬)"] -.WSS 상시연결.-> API
+    AGENT["slash-runner\n(사용자 PC, 로컬)"] -.WSS 상시연결.-> API
 
     style AGENT stroke-dasharray: 5 5
 ```
 
-`slash-agent`는 AWS 인프라 범위 밖(사용자 PC에서 로컬 실행)이라 위 그림에서도 별도 표시.
-web ↔ agent 사이에는 AWS를 거치는 경로가 없다 — 브라우저가 agent에 직접 접속하는 길은 없고,
-agent는 오직 `slash-api`로 나가는 outbound WSS 클라이언트다.
+`slash-runner`(구 `slash-agent`)는 AWS 인프라 범위 밖(사용자 PC에서 로컬 실행)이라 위 그림에서도
+별도 표시. web ↔ agent 사이에는 AWS를 거치는 경로가 없다 — 브라우저가 agent에 직접 접속하는
+길은 없고, agent는 오직 `slash-api`로 나가는 outbound WSS 클라이언트다.
 
 ## 1. 로그인 (✅ 2026-08-18, `docs/operations-log.md` §11-7)
 
@@ -102,11 +102,11 @@ sequenceDiagram
 sequenceDiagram
     participant B as 브라우저 (설정 > 연동)
     participant API as slash-api
-    participant A as slash-agent (사용자 PC)
+    participant A as slash-runner (사용자 PC)
 
     B->>API: 페어링 코드 요청 (POST /api/v1/agent/pair)
     API-->>B: 1회용 코드 발급
-    B->>B: 코드를 slash-agent 설정에 입력 (사람이 직접 복사)
+    B->>B: 코드를 slash-runner 설정에 입력 (사람이 직접 복사)
     A->>API: WSS 연결 (/ws/agent) + 코드 제시
     API-->>A: 페어링 승인, 연결 상시 유지
     B->>API: 상태 폴링
