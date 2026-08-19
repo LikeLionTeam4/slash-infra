@@ -18,8 +18,12 @@ mkdir -p /etc/systemd/system/ollama.service.d
 cat > /etc/systemd/system/ollama.service.d/override.conf <<'EOF'
 [Service]
 Environment="OLLAMA_HOST=0.0.0.0:11434"
+Environment="OLLAMA_KEEP_ALIVE=-1"
 EOF
 
+# 전용 GPU 인스턴스(gemma3:4b 단독)라 VRAM을 나눠 쓸 다른 워크로드가 없어
+# 무기한 유지해도 실질적인 단점이 없다(이슈 #41). API 요청 payload에는 keep_alive를
+# 넣지 않는다 — 넣으면 서버 env var보다 우선해서 운영값을 덮어쓸 수 있다.
 systemctl daemon-reload
 systemctl enable ollama
 systemctl restart ollama
@@ -29,3 +33,23 @@ until curl -sf http://127.0.0.1:11434/api/tags >/dev/null; do
 done
 
 ollama pull ${ollama_model}
+
+# user_data는 최초 부팅 시 1회만 실행되므로 워밍업은 여기서 끝내지 않고, EC2가 매
+# stop/start될 때마다 Ollama 기동 후 모델을 VRAM에 올려두는 oneshot 서비스로 등록한다.
+cat > /etc/systemd/system/ollama-warmup.service <<EOF
+[Unit]
+Description=Warm up ${ollama_model} in Ollama after boot
+After=ollama.service
+Wants=ollama.service
+
+[Service]
+Type=oneshot
+ExecStartPre=/bin/bash -c 'until curl -sf http://127.0.0.1:11434/api/tags >/dev/null; do sleep 2; done'
+ExecStart=/usr/bin/curl -sf http://127.0.0.1:11434/api/generate -d '{"model": "${ollama_model}", "keep_alive": -1}'
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+systemctl daemon-reload
+systemctl enable ollama-warmup

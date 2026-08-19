@@ -729,7 +729,13 @@ dev가 상시운영으로 전환되며 `local/network`(모듈 검증용 기반�
 
 **`slash-llm` 확인**: `main.py`의 `ask_gemma()`가 `/api/generate`에 보내는 payload(`{"model", "prompt", "stream"}`)에 `keep_alive`가 이미 없는 것을 확인 — 팀원이 우려한 중복 설정 문제는 애초에 없어서 별도 수정 없음.
 
-**후속(이슈 체크리스트 남은 항목, 미완)**: `aws_instance.ollama`는 `user_data_replace_on_change`를 지정하지 않아 기본값(`false`) — 이 상태로 `terraform apply`만 하면 인스턴스의 user-data 속성만 갱신될 뿐 실행 중인 인스턴스에 재반영되지 않는다(stop/start로는 cloud-init이 다시 안 돎, 위 §5-1/§11 설계 그대로). dev EC2에 실제로 반영하려면 인스턴스 교체(`terraform apply -replace=module.llm-runtime.aws_instance.ollama`, 모델 재pull로 재기동 몇 분 소요)나 SSM 세션으로 override.conf/유닛 파일을 직접 패치하는 방법 중 하나가 필요 — 살아있는 dev 인스턴스에 영향을 주는 작업이라 다음 라운드에 사람 확인 후 적용. 그 후 `scripts/smoke_dev.py`로 "재기동 직후 첫 요청"·"5분 유휴 후 요청" 두 케이스 재검증, dev `LLM_TIMEOUT`을 Backend 60초보다 짧게 조정하는 후속 조치가 남아있다.
+**dev EC2 반영**: `aws_instance.ollama`는 `user_data_replace_on_change`를 지정하지 않아 기본값(`false`)이라 `terraform apply`만으로는 실행 중인 인스턴스에 반영되지 않는다(stop/start로는 cloud-init이 다시 안 돎, 위 §5-1/§11 설계 그대로). 팀원이 dev를 쓰고 있을 수 있는 시간대라 인스턴스 교체(수 분 다운타임 + private IP 변경으로 `values-dev.yaml` 재배선 필요) 대신 **SSM Run Command(`AWS-RunShellScript`)로 라이브 인스턴스를 직접 패치**했다 — `override.conf`에 `OLLAMA_KEEP_ALIVE=-1` 추가, `ollama-warmup.service` 유닛 생성 후 `systemctl daemon-reload && restart ollama`(중단 수 초). 이슈에 사전 공지 후 진행.
+
+**검증**: `kubectl port-forward svc/slash-llm 18000:80` → `slash-llm/scripts/smoke_dev.py`로 두 케이스 확인.
+- 패치 직후(워밍업 서비스가 막 모델을 올린 상태): `/summary` 2.09초
+- 5분 유휴 후 재요청: `/summary` **1.63초** — §16 배경의 원인이었던 "5분 후 unload → 재로드 100초+" 문제가 재현되지 않음, `keep_alive=-1` 정상 동작 확인
+
+**미완(다음 라운드)**: "EC2 재기동 직후 첫 요청" 케이스는 아직 실측 전 — 지금 강제 재부팅 대신 **내일(2026-08-20) 09시 EventBridge 스케줄 자동 기동 때 자연스럽게 검증**하기로 함(다운타임 추가 없이 확인 가능). `ollama-warmup.service`가 `enable`된 상태라 이론상 재부팅마다 자동 실행되지만, 실제 재기동 경로로는 아직 확인 안 됨. 두 케이스 모두 확인되면 dev `LLM_TIMEOUT`을 Backend 60초보다 짧게 조정하는 후속 조치가 남아있다.
 
 ## 17. 파드 레벨 모니터링 현황 확인 + 후속 이슈 등록 (이슈 #47, 2026-08-19)
 
