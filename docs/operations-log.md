@@ -730,3 +730,12 @@ dev가 상시운영으로 전환되며 `local/network`(모듈 검증용 기반�
 **`slash-llm` 확인**: `main.py`의 `ask_gemma()`가 `/api/generate`에 보내는 payload(`{"model", "prompt", "stream"}`)에 `keep_alive`가 이미 없는 것을 확인 — 팀원이 우려한 중복 설정 문제는 애초에 없어서 별도 수정 없음.
 
 **후속(이슈 체크리스트 남은 항목, 미완)**: `aws_instance.ollama`는 `user_data_replace_on_change`를 지정하지 않아 기본값(`false`) — 이 상태로 `terraform apply`만 하면 인스턴스의 user-data 속성만 갱신될 뿐 실행 중인 인스턴스에 재반영되지 않는다(stop/start로는 cloud-init이 다시 안 돎, 위 §5-1/§11 설계 그대로). dev EC2에 실제로 반영하려면 인스턴스 교체(`terraform apply -replace=module.llm-runtime.aws_instance.ollama`, 모델 재pull로 재기동 몇 분 소요)나 SSM 세션으로 override.conf/유닛 파일을 직접 패치하는 방법 중 하나가 필요 — 살아있는 dev 인스턴스에 영향을 주는 작업이라 다음 라운드에 사람 확인 후 적용. 그 후 `scripts/smoke_dev.py`로 "재기동 직후 첫 요청"·"5분 유휴 후 요청" 두 케이스 재검증, dev `LLM_TIMEOUT`을 Backend 60초보다 짧게 조정하는 후속 조치가 남아있다.
+
+## 17. 파드 레벨 모니터링 현황 확인 + 후속 이슈 등록 (이슈 #47, 2026-08-19)
+
+CloudWatch 대시보드(§15, PR #46) 이후 "RDS/ALB/Valkey는 보이는데 개별 파드는요?"라는 질문 계기로 점검. `kubectl top pod`로 실제 클러스터(`slash-eks-dev`)에 접속해 확인한 결과:
+
+- **`metrics-server`는 이미 설치돼 있었다**(`helm list -A` 확인 — release `metrics-server`, `kube-system`, 2026-08-18 09:25 설치. `aws-load-balancer-controller`/`karpenter`/`external-secrets`와 같은 날 GitOps로 같이 설치됐는데 `docs/aws-architecture.md`에 이 사실이 전혀 반영돼 있지 않았다). `kubectl top pod -n default`로 slash-api/nlu/llm 파드별 CPU/메모리 조회 정상 확인.
+- **그럼에도 남는 사각지대**: `metrics-server`는 클러스터 내부용 순간 스냅샷이라 CloudWatch로 안 나가고, 이력도 안 남는다 — 파드가 크래시루프/OOMKilled 나도 사후에 그 시점 리소스 사용량을 볼 방법이 없다(이슈 #39가 다루는 "사후 분석 근거 부재"와 같은 문제).
+
+**조치**: `docs/aws-architecture.md` §5(metrics-server 설치 사실 추가)·§13(TODO에 파드 지표 항목 추가) 갱신. Container Insights vs Prometheus/Grafana 자체 호스팅 중 뭘 선택할지는 비용·운영부담 실측이 필요해 [이슈 #47](https://github.com/LikeLionTeam4/slash-infra/issues/47)로 분리 등록(이슈 #44에 교차 코멘트 남김) — 로그 수집(이슈 #44 1·2번)과 겹치는 부분이 있어 같이 검토.
