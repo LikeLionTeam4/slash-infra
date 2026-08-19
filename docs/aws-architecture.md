@@ -14,6 +14,81 @@ Slash 프로젝트 전체(웹 프론트엔드 제외 백엔드 서비스군)를 
 - 아래 모든 리소스는 환경별로 복제 가능한 모듈 구조를 전제로 설계하고, 환경을 늘릴 때 값(인스턴스 크기, Multi-AZ 여부 등)만 다르게 넣는 방식을 목표로 한다.
 - 예산은 "적당히 여유 있음" — 비용 최소화보다 가용성·확장성을 우선한다. 다만 GPU 노드처럼 비용이 크게 튀는 항목은 §12에 별도로 짚는다.
 
+### 1-1. 전체 구성도 (dev 기준, 2026-08-19)
+
+```mermaid
+flowchart TB
+    subgraph EXTERNAL["외부"]
+        USER["사용자 브라우저"]
+        GH["GitHub Actions\n(slash-api/nlu/llm 저장소)"]
+    end
+
+    subgraph ACCT["계정 공용 (environments/bootstrap)"]
+        R53["Route53\nsbsh.cloud"]
+        ECR["ECR\nslash-api / slash-nlu / slash-llm"]
+        CT["CloudTrail"]
+        STATE["S3\nTerraform state (use_lockfile)"]
+        BUDGET["AWS Budgets\nProject=slash 태그 기준"]
+    end
+
+    subgraph FRONT["프론트엔드 서빙"]
+        CF["CloudFront\ndev.sbsh.cloud"]
+        S3W["S3\n정적 자산 (Vite build)"]
+    end
+
+    COG["Cognito Hosted UI\nEMAIL_OTP, PKCE(code) only"]
+
+    subgraph VPC["VPC 10.8.0.0/16 (ap-northeast-2a / 2c, AZ당 1개씩)"]
+        direction TB
+        subgraph PUB["public 서브넷"]
+            ALB["ALB\napi.dev.sbsh.cloud"]
+            NAT["NAT Gateway ×2"]
+        end
+        subgraph APP["private-app 서브넷"]
+            subgraph EKS["EKS 범용 노드그룹\n⏰ 평일 09~21시만 desired=3 (그 외 0)"]
+                ALBC["AWS LB Controller"]
+                API["slash-api"]
+                NLU["slash-nlu"]
+                LLM["slash-llm"]
+                ARGOCD["ArgoCD"]
+            end
+            OLLAMA["Ollama EC2 (g4dn.xlarge)\n10.8.11.172:11434\n⏰ 평일 09~21시만 start"]
+        end
+        subgraph DBTIER["private-db 서브넷 (인터넷 경로 없음)"]
+            RDS[("RDS PostgreSQL\nMulti-AZ · slash_dev/slash_demo\n⏰ 평일 09~21시만 start")]
+            VALKEY[("Valkey (ElastiCache)\nAUTH + TLS, 상시 가동")]
+        end
+        S3EP["S3 Gateway Endpoint"]
+    end
+
+    subgraph OBS["옵저버빌리티"]
+        CW["CloudWatch 알람\n(RDS CPU/스토리지)"]
+        SNS["SNS → 이메일"]
+    end
+
+    USER -->|HTTPS| CF --> S3W
+    USER -->|"HTTPS api.dev.sbsh.cloud"| ALB --> ALBC --> API
+    API --> NLU
+    API --> LLM --> OLLAMA
+    API -->|5432| RDS
+    API -->|6379| VALKEY
+    USER <-.->|Hosted UI 리다이렉트| COG
+    GH -->|"이미지 push (sha- 태그)"| ECR
+    GH -->|"values-dev.yaml 직접 커밋"| ARGOCD
+    ARGOCD -.->|GitOps sync| EKS
+    ECR -.->|image pull| EKS
+    APP -.-> S3EP
+    DBTIER -.-> S3EP
+    RDS -.-> CW --> SNS
+    R53 --> CF
+    R53 --> ALB
+```
+
+- 컨트롤플레인·NAT·Valkey·ALB는 stop 개념이 없어 상시 유지, EKS 노드그룹/RDS/Ollama EC2만
+  평일 09~21시(KST) 스케줄로 내렸다 올린다(2026-08-19, `modules/eks/schedule.tf`,
+  `modules/database/schedule.tf`, `modules/llm-runtime/schedule.tf`) — 다이어그램의 ⏰ 표시.
+- 실제 리소스 배치·트래픽 왕복이 어떻게 요청 단위로 흐르는지는 `docs/user-flow.md` 참고.
+
 ## 2. 리전 & 태깅 전략
 
 - 기본 리전: `ap-northeast-2` (서울) — 기존 `environments/dev/frontend`와 동일.
@@ -208,6 +283,37 @@ slash-web → slash-api → slash-llm(EKS) → Ollama(EC2, EKS 밖) → 역순 �
 - `production` Environment(필수 리뷰어)는 저장소 설정에서 생성하는 것으로, 실제 배포 워크플로 자체는 [이슈 #11](https://github.com/LikeLionTeam4/slash-infra/issues/11)(각 서비스 실제 Dockerfile 대기)이 풀려야 착수 가능 — 지금은 자리만 마련해둔 상태.
 - 지금은 세 저장소 다 `main`이 `dev`보다 9~35개 커밋 뒤처진 사실상 미사용 브랜치라 이 변경이 팀 작업에 즉시 영향을 주진 않는다. 첫 `dev→main` 릴리스 시점에 팀 공지가 필요 — [이슈 #18](https://github.com/LikeLionTeam4/slash-infra/issues/18)에서 추적.
 - ~~`environments/dev/frontend`(→ `dev.sbsh.cloud`) 착수는 보류~~ → **착수 완료(2026-08-18, 이슈 #31)** — 백엔드 dev QA 가능 조건이 충족돼 바로 진행. `slash-api` Ingress 활성화 + DNS 연결, slash-web `deploy-dev.yml` merge, 브라우저로 로그인까지 왕복 확인. `docs/operations-log.md` §11-7 참고.
+
+### 9-4. CI/CD 흐름 다이어그램
+
+```mermaid
+sequenceDiagram
+    participant DEV as 개발자
+    participant REPO as 서비스 저장소\n(slash-api/nlu/llm, dev 브랜치)
+    participant CI as GitHub Actions
+    participant ECR as ECR
+    participant INFRA as slash-infra\n(values-dev.yaml)
+    participant ARGOCD as ArgoCD
+    participant EKS as EKS (dev)
+
+    DEV->>REPO: push (dev 브랜치)
+    REPO->>CI: 워크플로 트리거
+    CI->>CI: OIDC로 임시 자격증명 획득
+    CI->>CI: 빌드 → 테스트
+    CI->>ECR: 이미지 push (sha-<commit> 태그, IMMUTABLE)
+    CI->>INFRA: values-dev.yaml의 image.tag 직접 커밋·push
+    ARGOCD->>INFRA: 폴링(60s) 또는 hard refresh로 변경 감지
+    ARGOCD->>EKS: 새 image.tag로 sync
+    EKS->>ECR: image pull
+    EKS-->>ARGOCD: rollout 상태 보고
+```
+
+- ArgoCD Image Updater 대신 **서비스 저장소 CI가 `values-dev.yaml`을 직접 커밋**하는 방식으로
+  확정(2026-08-18, 이슈 #24) — 클러스터에 컴포넌트를 추가하지 않고 기존 GitOps 패턴 유지.
+- 프론트엔드(`slash-web`)는 이 파이프라인과 별개 — §9-2의 S3 sync + CloudFront invalidation만
+  거치고 ArgoCD/EKS를 전혀 쓰지 않는다.
+- prod는 `main` push/merge + `production` Environment 필수 리뷰어 승인 게이트가 붙는다(§9-3) —
+  위 다이어그램은 dev(승인 없음) 기준.
 
 ## 10. 옵저버빌리티 (CloudWatch / CloudTrail)
 
