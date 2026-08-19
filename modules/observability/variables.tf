@@ -76,3 +76,9 @@ variable "tags" {
   type        = map(string)
   default     = {}
 }
+
+variable "aws_region" {
+  description = "대시보드 위젯의 region 필드에 쓰는 값. 이 모듈은 provider 설정을 갖지 않아 별도로 받는다"
+  type        = string
+  default     = "ap-northeast-2"
+}
