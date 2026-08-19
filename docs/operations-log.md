@@ -704,3 +704,17 @@ dev가 상시운영으로 전환되며 `local/network`(모듈 검증용 기반�
 **조치**: `NLU_BASE_URL: "http://slash-nlu"`와 동일 패턴으로 `LLM_BASE_URL: "http://slash-llm"` 추가. `argocd/applications-dev/slash-llm.yaml`이 release 이름을 `slash-llm`으로 쓰고 있어 chart fullname도 `slash-llm`(slash-nlu와 동일 패턴)임을 확인했고, `helm/slash-llm/values.yaml`의 `service.port: 80`→`targetPort: 8000`이라 주입값에는 포트를 안 붙인다.
 
 **후속(이슈 체크리스트 남은 항목)**: slash-api#42 머지·배포 후 실제 `/summary` 왕복 확인은 아직 미완 — infra 쪽 배선만 이번에 반영.
+
+## 15. CloudWatch 대시보드 추가 (이슈 #44, 2026-08-19)
+
+"팀원이 리소스 하나하나 안 보고도 인프라 상태를 한눈에 볼 수 있으면 좋겠다"는 요청 계기로 진행. [이슈 #44](https://github.com/LikeLionTeam4/slash-infra/issues/44) 할 일 목록 중 3번째("대시보드 1개로 RDS/ALB/EKS/Valkey 핵심 지표 시각화")만 처리 — 1·2·4번(로그 수집, 비용 추정)은 범위 밖으로 남겨두고 이슈에 코멘트로 명시했다.
+
+**`modules/observability/dashboard.tf`(신규)**: §13에서 만든 알람 7개(RDS 2 + ALB 2 + Valkey 3)를 그대로 위젯화. 위젯마다 namespace/metric/dimension을 다시 선언하는 대신 `annotations.alarms`로 해당 알람 ARN을 참조하는 방식을 택함 — 알람 쪽 임계값이 바뀌면 대시보드에도 자동 반영되고, 값이 두 군데서 어긋날 일이 없다. ALB/Valkey 위젯은 알람과 마찬가지로 `var.alb_arn_suffix`/`var.valkey_cache_cluster_id`가 `null`이면 생성되지 않는다(local 등에서 모듈 재사용 시 안전).
+
+**EKS는 이번 범위에서 제외**: RDS/ALB/ElastiCache와 달리 EKS는 Container Insights를 켜지 않으면 CloudWatch에 기본 지표를 아예 내보내지 않는다 — 지금 위젯을 만들어도 빈 그래프만 뜬다. Container Insights 도입 여부는 이슈 #44의 1·2번 항목(로그 수집)과 함께 별도로 검토해야 해서 위젯을 보류.
+
+**변수/출력 추가**: `modules/observability/variables.tf`에 `aws_region`(기본 `ap-northeast-2`, 위젯의 `region` 필드용 — 이 모듈은 provider 설정을 갖지 않아 별도로 받아야 함) 추가. `outputs.tf`에 `dashboard_url`(콘솔 바로가기 링크) 추가하고 `environments/dev/observability/outputs.tf`에도 그대로 노출.
+
+**비용**: 계정당 대시보드 3개까지 무료(월 50개 지표 포함)라 이번 1개 추가로는 비용 증가 없음.
+
+**검증**: `terraform fmt -recursive` 변경 없음, `terraform validate`(모듈 단독) 통과. 실제 apply는 아직 안 함 — 다음 라운드에서 `dev/observability` plan 확인 후 반영 예정.
