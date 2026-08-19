@@ -153,6 +153,7 @@ flowchart TB
 - IRSA 활성화 — 클러스터 생성 시 AWS가 발급하는 클러스터 전용 OIDC 발급자를 `aws_iam_openid_connect_provider`로 등록해서, 파드가 자기 ServiceAccount 신원으로 IAM Role을 빌려쓸 수 있게 한다(§7-1의 Secrets Manager 접근이 이 경로를 씀). GitHub Actions용 OIDC provider(§9-1)와는 별개의 리소스.
 - **오토스케일러는 Karpenter로 확정.** 단 이번 조각에는 컨트롤러용 IRSA Role(`karpenter_controller_role_arn`)만 준비 — Karpenter 자체(Helm 설치, NodePool/EC2NodeClass CRD)는 K8s 내부 리소스라 GitOps로 별도 설치. 노드에 붙일 인스턴스 프로필은 범용 노드그룹과 동일한 Role을 재사용.
 - ALB Ingress Controller(§8)도 같은 이유로 이번 조각엔 없음 — Helm 설치는 GitOps, IRSA Role은 그 조각에서 준비.
+- **`metrics-server`도 설치돼 있다**(2026-08-18, `helm list` 확인 — Karpenter/ALB Controller/External Secrets와 같은 날 GitOps로 설치됨). `kubectl top pod`/HPA 전제조건은 충족된 상태지만, 클러스터 내부용 순간 스냅샷일 뿐 CloudWatch로는 안 나가고 이력도 안 남는다 — CloudWatch로 파드 지표를 보내는 방식(Container Insights vs Prometheus/Grafana)은 별도로 검토 중([이슈 #47](https://github.com/LikeLionTeam4/slash-infra/issues/47)).
 
 ### 5-1. LLM 추론 런타임 (Ollama, EC2 — EKS 밖)
 
@@ -383,5 +384,6 @@ local/dev/prod 3단계로 나눈다. **결정(2026-08-12): 팀 전체가 계정 
 - CloudTrail 로그 보관 기간(지금은 90일 잠정 기본값), CloudWatch 알람의 실제 임계값(지금은 잠정값) — 트래픽 실측 후 조정
 - ~~ALB Ingress가 생기면 그 알람(5xx 비율, 레이턴시)을 `modules/observability`에 추가~~ → **완료(2026-08-19, 이슈 #43)**, Valkey 알람도 같이 채움. GPU 사용률 알람은 GPU 노드그룹을 안 만들기로 확정(§5-1)해서 대상 없음
 - EKS 컨트롤플레인/파드 로그 수집 여부, Container Insights 도입 여부 — 비용 대비 효과 검토 중(이슈 #44)
+- 파드 리소스 지표(CPU/메모리)를 CloudWatch로 — Container Insights vs Prometheus/Grafana 자체 호스팅 검토 중(이슈 #47). `metrics-server`(§5)로 순간 스냅샷은 가능하나 이력·알람은 아직 없음
 - `Owner` 태그를 지금부터 붙일지, 팀이 나뉘는 시점부터 붙일지
 - Valkey(ElastiCache) 정확한 노드 타입/개수 (§7-2, 캐시 대상 데이터와 세션 규모 확정 후)
