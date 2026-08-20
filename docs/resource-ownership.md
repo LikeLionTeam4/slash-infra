@@ -7,6 +7,20 @@
 그림으로 안 남기면 다시 헷갈리기 쉽다. 기준: 2026-08-19, 각 `environments/*/main.tf`의
 `backend`/`terraform_remote_state`/모듈 호출 실제 코드.
 
+## ⚠️ 계정 자체가 공유 강의용 계정
+
+이 문서가 다루는 건 "`slash` 소유 리소스 중에서" 어느 `environments/*`가 apply하는가이지,
+AWS 계정(`061039804626`) 전체가 `slash` 소유라는 뜻이 아니다. `aws iam list-users`로 보면
+`a-student-03/09/14`, `b-instructor-01/02`, `b-student-01~13` 등 다수의 수강생·강사
+IAM 사용자가 이 계정을 같이 쓰고 있다(2026-08-20 확인).
+
+콘솔이나 `aws ec2 describe-instances` 같은 명령으로 계정 전체를 훑으면 `slash-` 접두사가
+없는 리소스(예: `my-ec2-beam0331`, `my-database-beam`, `cluster-suis`, `suis-db`,
+`k3-server-suis`)가 같이 보이는데, 이건 **다른 수강생이 개인 실습용으로 콘솔에서 직접
+만든 리소스**다 — `slash-infra` 코드 어디에도 없고(grep으로 확인됨), 당연히 이 문서의
+소유권 맵에도 포함되지 않는다. 켜져있다고 우리가 끄거나 스케줄을 걸 대상이 아니다.
+구분 기준은 단순히 **`slash-` 접두사 유무 + 이 레포 코드에 정의돼 있는지**다.
+
 ```mermaid
 flowchart TB
     subgraph BOOTSTRAP["environments/bootstrap\n계정당 최초 1회, state는 로컬(닭-달걀 문제, §3)"]

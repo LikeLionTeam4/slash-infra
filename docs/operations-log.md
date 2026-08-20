@@ -2,7 +2,7 @@
 
 `docs/aws-architecture.md`가 "무엇을 왜 이렇게 설계했는가"를 다루는 설계 문서라면, 이 문서는 **실제로 AWS에 뭘 적용했고, 지우려면 뭘 해야 하는지**를 다루는 운영 기록이다. 인프라가 늘어날 때마다(RDS, EKS, dev/prod 환경 등) 계속 갱신되는 **살아있는 문서** — 아래 각 섹션을 그때그때 추가/수정한다.
 
-> **주의**: 아래 리소스 ID·도메인은 특정 AWS 계정(`727646470302`) 하나에서 실습한 결과다. 부트캠프 계정은 사람마다 따로 발급되므로, 다른 계정에서 시작한다면 이 값들은 안 맞고 처음부터 다시 apply해야 한다 — [README §다른 AWS 계정에서 시작하기](../README.md#다른-aws-계정에서-시작하기-팀원용) 참고.
+> **주의**: 아래 리소스 ID·도메인은 특정 AWS 계정(`061039804626`, 2026-08-13 재발급 — 옛 계정 `727646470302`는 §4/§18 참고) 하나에서 실습한 결과다. 이 계정은 여러 수강생·팀이 공유하는 부트캠프 계정이라 `slash-` 접두사 없는 리소스가 섞여 보일 수 있다(`docs/resource-ownership.md` "계정 자체가 공유 강의용 계정" 절 참고). 다른 계정에서 시작한다면 이 값들은 안 맞고 처음부터 다시 apply해야 한다 — [README §다른 AWS 계정에서 시작하기](../README.md#다른-aws-계정에서-시작하기-팀원용) 참고.
 
 ## 1. 전체 순서 & 구현 상태 한눈에 보기
 
@@ -747,3 +747,15 @@ CloudWatch 대시보드(§15, PR #46) 이후 "RDS/ALB/Valkey는 보이는데 개
 - **그럼에도 남는 사각지대**: `metrics-server`는 클러스터 내부용 순간 스냅샷이라 CloudWatch로 안 나가고, 이력도 안 남는다 — 파드가 크래시루프/OOMKilled 나도 사후에 그 시점 리소스 사용량을 볼 방법이 없다(이슈 #39가 다루는 "사후 분석 근거 부재"와 같은 문제).
 
 **조치**: `docs/aws-architecture.md` §5(metrics-server 설치 사실 추가)·§13(TODO에 파드 지표 항목 추가) 갱신. Container Insights vs Prometheus/Grafana 자체 호스팅 중 뭘 선택할지는 비용·운영부담 실측이 필요해 [이슈 #47](https://github.com/LikeLionTeam4/slash-infra/issues/47)로 분리 등록(이슈 #44에 교차 코멘트 남김) — 로그 수집(이슈 #44 1·2번)과 겹치는 부분이 있어 같이 검토.
+
+## 18. 09~21시 스케줄 재점검 + 공유 계정 non-slash 리소스 목록화 (이슈 #53, 2026-08-20)
+
+"09~21시 외엔 절대 사용 안 하기로 했다"는 팀 규칙이 실제로 지켜지고 있는지 점검해달라는 요청으로 시작. `aws ec2 describe-instances`/`describe-db-instances` 등으로 계정 전체를 훑는 과정에서 두 가지를 확인했다.
+
+**① slash 소유 리소스는 이미 정상 — 추가 조치 불필요**: `aws scheduler list-schedules`로 재확인한 결과 `slash-eks-node-start/stop-dev`, `slash-rds-start/stop-dev`, `slash-ollama-start/stop-dev` 6개 스케줄 전부 `ENABLED`, `cron(0 9/21 ? * MON-FRI *)` + `Asia/Seoul`로 §11-5/§12 그대로 적용돼 있었다. EKS 노드그룹은 21시에 `min/max/desired=0`으로 내려가 컨트롤플레인만 남고(파드 전부 종료), 09시에 원상복구된다 — 팀원이 21시 이후 `slash-api` 무응답을 겪은 것도 이 스케줄의 정상 동작이었다.
+
+**② 계정 전체를 훑을 때 `slash-` 접두사 없는 리소스가 섞여 나옴**: `my-ec2-beam0331`(EC2), `my-database-beam`(RDS), `cluster-suis`(EKS), `suis-db`(RDS), `k3-server-suis`(EC2). 이 계정이 여러 수강생·팀이 공유하는 계정이라는 사실 자체는 이미 §4(2026-08-05, GitHub OIDC provider가 `Team1` 소유였던 건)에 기록돼 있었지만, 그때는 "계정당 1개"인 리소스(OIDC provider) 얘기였고 이번처럼 EC2/RDS 같은 일반 리소스가 실제로 몇 개나 섞여 있는지 구체적으로 나열해본 적은 없었다. `aws iam list-users`로 `a-student-03/09/14`, `b-instructor-01/02`, `b-student-01~13`을 확인, `slash-infra` 코드 전체 grep으로 이 리소스명들이 하나도 없음을 확인해 다른 수강생 개인 리소스로 결론 — 건드리지 않음. `docs/resource-ownership.md`에 이 목록과 판별 기준(`slash-` 접두사 + 코드 존재 여부)을 별도 절로 추가해 다음에 계정을 훑는 사람이 같은 조사를 반복하지 않도록 함.
+
+**정정 — Elastic IP 6개는 미사용이 아니었음**: `aws ec2 describe-addresses`에서 `InstanceId`가 전부 `None`이라 처음엔 "미연결 낭비 리소스"로 판단했다. `NetworkInterfaceId`로 재조회해보니 실제로는 NAT Gateway 2개, ALB(`k8s-default-slashapi`) 2개, RDS 퍼블릭 액세스용 ENI 2개에 각각 연결돼 있었다 — EC2에 붙는 EIP만 `InstanceId`로 잡히고 NAT/ALB/RDS ENI에 붙는 EIP는 `InstanceId`가 안 채워지는 게 원인. release 직전에 재확인해서 실제로 실행하진 않았지만, `InstanceId` 필드만 보고 "미연결"이라 단정하면 안 된다는 게 이번 교훈 — 확인하려면 `NetworkInterfaceId`까지 봐야 한다.
+
+**결론**: 이번 라운드는 코드 변경 없음, 문서 정정만 진행(`docs/resource-ownership.md` 신규 절, 본 항목). NAT Gateway·로드밸런서는 "stop" 개념이 없고(삭제/재생성만 가능) 팀 프로젝트 안정성 리스크가 커서 이번에도 스케줄 대상에서 제외하기로 함 — §12 결론과 동일.
