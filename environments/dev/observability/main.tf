@@ -95,5 +95,7 @@ module "observability" {
     "ryjun91@naver.com",
     "ryjun91@gmail.com",
     "baegugureview@gmail.com",
+    "jmg0630@gmail.com",
+    "max020719@gmail.com",
   ]
 }
