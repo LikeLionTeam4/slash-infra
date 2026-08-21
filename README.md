@@ -181,6 +181,8 @@ kubeconfig 흔적이다.
 
 **Terraform apply/destroy 순서와 구현된 것/안 된 것 전체 표**는 [docs/operations-log.md §1](docs/operations-log.md#1-전체-순서--구현-상태-한눈에-보기) 참고 — 계속 갱신되는 운영 기록.
 
+**장애 대응 테스트(게임 데이) 카탈로그**는 [docs/resilience-testing.md](docs/resilience-testing.md) 참고 — 실행 결과는 `operations-log.md`에 기록.
+
 ## 관련 저장소
 
 | 저장소 | 역할 |
