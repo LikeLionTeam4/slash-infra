@@ -775,3 +775,19 @@ CloudTrail로 `ResourceName=<natId>` 조회해 타임라인 확정:
 **교훈**: 공유 계정에서는 `slash-` 접두사 리소스도 다른 팀의 실수(잘못된 스코프의 destroy/apply)로부터 완전히 안전하지 않다 — §18에서 다룬 "남의 non-slash 리소스를 건드리지 않기"의 반대 방향 리스크. NAT/EIP처럼 삭제·재생성만 가능한 리소스는 Terraform state가 drift를 정확히 잡아주므로(`0 to destroy`로 안전 확인 가능) 장애 시 우선 `terraform plan`으로 실제 삭제 여부를 판단하고 그대로 `apply`하면 된다. 재발 방지책(예: 공유 계정 삭제 권한 제한, 팀 간 공지)은 인프라 코드 변경 사항이 아니라 계정 운영 정책 문제라 이슈에서 팀에 공유만 하고 별도 후속은 만들지 않음.
 
 **다운스트림 영향 확인 — slash-api 401 로그인 루프**: 같은 시간대 [slash-api#56](https://github.com/LikeLionTeam4/slash-api/issues/56)(유효한 Cognito 토큰인데도 `/api/v1/me` 등이 401)이 별도로 보고돼 있었는데, `kubectl logs`로 원인이 이 NAT 장애였음을 확인했다 — `NimbusJwtDecoder`가 서명 검증용 Cognito JWKS(`cognito-idp.ap-northeast-2.amazonaws.com`, VPC 엔드포인트 없는 퍼블릭 인터넷 경로)를 fetch하지 못해 `ConnectException: Operation timed out`이 반복되고 있었다. NAT 복구 후 파드 안에서 `wget`으로 JWKS 엔드포인트가 `200 OK`로 정상 응답하는 것까지 확인, slash-api#56에 원인·해결 코멘트 남김. private-app 서브넷 아웃바운드 장애는 Ingress 트래픽(ALB→파드)엔 영향이 없어도 파드가 능동적으로 외부(Cognito, 외부 API 등)로 나가는 모든 경로를 끊는다는 점을 이번에 구체적 사례로 확인 — 다음에 "토큰은 멀쩡한데 401"류 증상이 보이면 NAT 상태부터 의심할 것.
+
+## 20. 상시 유지 리소스 삭제 시 SNS 이메일 알림 추가 (§19 후속, 2026-08-21)
+
+§19 사고를 겪고 나서 "이런 게 다시 생기면 바로 알 수 있어야 한다"는 필요로 추가. 조사 중 부수적으로 발견한 것: 기존 CloudWatch 알람(RDS CPU/스토리지, ALB 5xx/레이턴시, Valkey CPU/메모리/eviction, §13/§15)의 SNS 토픽(`slash-alarms-dev`)에 **구독자가 0명**이었다 — `environments/dev/observability/main.tf`에 "구독은 필요할 때 콘솔/CLI로 추가"라는 주석과 함께 의도적으로 비워둔 상태가 지금까지 그대로였던 것. 이번에 같이 메꿨다.
+
+**왜 CloudWatch 알람이 아니라 EventBridge인가**: CloudWatch 알람은 메트릭 기반이라 "리소스가 통째로 사라짐" 자체를 감지하기 어렵다(메트릭이 그냥 없어질 뿐). 대신 이미 켜져 있는 CloudTrail(`slash-trail`)의 관리 이벤트를 EventBridge 기본 버스가 자동으로 실시간 수신하는 것을 이용해, §2에 "상시 유지"로 문서화된 리소스의 `Delete*` API 호출을 곧바로 SNS로 보내는 방식을 택했다.
+
+**`modules/observability/critical_deletion_alarms.tf`(신규)**: 6개 EventBridge 규칙 + 타깃(SNS, `input_transformer`로 사람이 읽을 수 있는 문장으로 가공):
+- `DeleteNatGateway`(EC2), `DeleteLoadBalancer`(ELBv2) — **계정 전체 스코프**. NAT/ALB는 재생성될 때마다 ID가 바뀌어 특정 리소스로 미리 필터링할 수 없다. 부트캠프 공유 계정이라 다른 팀이 자기 것을 지워도 같이 울리지만(오탐 감수), §19처럼 "다른 팀이 우리 걸 지웠는데 몰랐다"를 놓치는 비용이 훨씬 크다고 판단해 그대로 둠.
+- `DeleteCluster`/`DeleteNodegroup`(EKS), `DeleteUserPool`(Cognito), `DeleteReplicationGroup`(Valkey) — 이름/ID가 고정이라 `requestParameters`로 slash 리소스만 정확히 필터링(각각 `eks_cluster_name`/`cognito_user_pool_id`/`valkey_replication_group_id` 변수, null이면 규칙 자체를 안 만듦).
+
+**SNS 구독 다중화**: `alarm_email`(string) → `alarm_emails`(list(string))로 모듈 변수 변경, `for_each`로 구독 여러 개 생성. `environments/local/observability`는 기존 단일 `alarm_email` 변수를 리스트로 감싸 브리지. `environments/dev/observability`에 팀원 이메일 3개 등록 — `aws sns list-subscriptions-by-topic`으로 전부 `PendingConfirmation` 확인, 각자 메일함에서 Confirm 링크를 눌러야 실제 수신 시작(SNS 이메일 프로토콜 표준 동작).
+
+**검토했다가 보류한 것 — `lifecycle { prevent_destroy = true }`**: NAT Gateway에 걸 수 있는지 검토했으나 (1) 오늘 사고는 애초에 우리 Terraform이 아니라 다른 팀의 AWS API 직접 호출이라 `prevent_destroy`로는 못 막았을 것이고, (2) `modules/network`가 dev(상시 유지)와 local(매 라운드 destroy되는 디스포저블 테스트베드)에서 같이 쓰이는데 `prevent_destroy`는 Terraform이 변수/표현식을 허용하지 않고 리터럴 `true`/`false`만 받아서(직접 `terraform validate`로 확인, `Variables not allowed` 에러) environment별 조건부 적용이 안 된다. 리소스를 이중 정의하는 우회는 route table 참조가 복잡해져서 보류 — 이번 위협엔 EventBridge 알림이 맞는 도구.
+
+**검증**: `terraform plan`(observability, `16 to add, 0 to change, 0 to destroy`) → apply 완료. `aws events list-rules --name-prefix slash-`로 규칙 6개 전부 `ENABLED` 확인.

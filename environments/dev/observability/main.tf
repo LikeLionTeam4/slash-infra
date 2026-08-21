@@ -50,6 +50,16 @@ data "terraform_remote_state" "eks" {
   }
 }
 
+data "terraform_remote_state" "cognito" {
+  backend = "s3"
+
+  config = {
+    bucket = "slash-tfstate-061039804626"
+    key    = "dev/cognito.tfstate"
+    region = "ap-northeast-2"
+  }
+}
+
 # AWS Load Balancer Controller가 만든 ALB는 Terraform이 직접 관리하지 않는다(K8s Ingress가
 # 만듦, modules/eks/alb_controller.tf 참고). group.name을 안 써서(helm/slash-api/templates/ingress.yaml)
 # Ingress 1개당 전용 ALB가 뜨고 이름이 자동 생성돼 재생성될 때마다 바뀔 수 있어서, 이름 대신
@@ -76,5 +86,14 @@ module "observability" {
 
   alb_arn_suffix = data.aws_lb.slash_api.arn_suffix
 
-  # alarm_email은 비워둔다 — SNS 토픽만 만들고, 구독은 필요할 때 콘솔/CLI로 추가.
+  eks_cluster_name            = data.terraform_remote_state.eks.outputs.cluster_name
+  cognito_user_pool_id        = data.terraform_remote_state.cognito.outputs.user_pool_id
+  valkey_replication_group_id = data.terraform_remote_state.database.outputs.valkey_replication_group_id
+
+  # NAT Gateway 삭제 사고(2026-08-21, slash-infra#56) 계기로 팀원 알림 추가.
+  alarm_emails = [
+    "ryjun91@naver.com",
+    "ryjun91@gmail.com",
+    "baegugureview@gmail.com",
+  ]
 }

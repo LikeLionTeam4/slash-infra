@@ -36,5 +36,5 @@ module "observability" {
   environment = "local"
 
   rds_instance_id = var.rds_instance_id
-  alarm_email     = var.alarm_email
+  alarm_emails    = var.alarm_email == null ? [] : [var.alarm_email]
 }

@@ -25,8 +25,26 @@ variable "rds_free_storage_threshold_bytes" {
   default     = 2147483648
 }
 
-variable "alarm_email" {
-  description = "알람 알림 받을 이메일. null이면 SNS 구독 없이 토픽만 만든다 (나중에 콘솔/CLI로 구독 추가 가능)"
+variable "alarm_emails" {
+  description = "알람 알림 받을 이메일 목록. 빈 리스트면 SNS 구독 없이 토픽만 만든다 (나중에 콘솔/CLI로 구독 추가 가능)"
+  type        = list(string)
+  default     = []
+}
+
+variable "eks_cluster_name" {
+  description = "이 이름의 EKS 클러스터가 삭제(DeleteCluster/DeleteNodegroup)되면 즉시 알림. null이면 알림을 만들지 않는다"
+  type        = string
+  default     = null
+}
+
+variable "cognito_user_pool_id" {
+  description = "이 ID의 Cognito User Pool이 삭제(DeleteUserPool)되면 즉시 알림. null이면 알림을 만들지 않는다"
+  type        = string
+  default     = null
+}
+
+variable "valkey_replication_group_id" {
+  description = "이 ID의 Valkey replication group이 삭제(DeleteReplicationGroup)되면 즉시 알림. null이면 알림을 만들지 않는다"
   type        = string
   default     = null
 }
