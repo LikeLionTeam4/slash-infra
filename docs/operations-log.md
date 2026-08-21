@@ -759,3 +759,17 @@ CloudWatch 대시보드(§15, PR #46) 이후 "RDS/ALB/Valkey는 보이는데 개
 **정정 — Elastic IP 6개는 미사용이 아니었음**: `aws ec2 describe-addresses`에서 `InstanceId`가 전부 `None`이라 처음엔 "미연결 낭비 리소스"로 판단했다. `NetworkInterfaceId`로 재조회해보니 실제로는 NAT Gateway 2개, ALB(`k8s-default-slashapi`) 2개, RDS 퍼블릭 액세스용 ENI 2개에 각각 연결돼 있었다 — EC2에 붙는 EIP만 `InstanceId`로 잡히고 NAT/ALB/RDS ENI에 붙는 EIP는 `InstanceId`가 안 채워지는 게 원인. release 직전에 재확인해서 실제로 실행하진 않았지만, `InstanceId` 필드만 보고 "미연결"이라 단정하면 안 된다는 게 이번 교훈 — 확인하려면 `NetworkInterfaceId`까지 봐야 한다.
 
 **결론**: 이번 라운드는 코드 변경 없음, 문서 정정만 진행(`docs/resource-ownership.md` 신규 절, 본 항목). NAT Gateway·로드밸런서는 "stop" 개념이 없고(삭제/재생성만 가능) 팀 프로젝트 안정성 리스크가 커서 이번에도 스케줄 대상에서 제외하기로 함 — §12 결론과 동일.
+
+## 19. NAT Gateway 아웃바운드 장애 — 공유 계정 다른 팀이 실수로 삭제 (이슈 #55, 2026-08-21)
+
+"NAT가 안 되는 것 같다"는 팀원 제보로 점검 시작.
+
+**원인**: `aws ec2 describe-nat-gateways --filter Name=vpc-id,Values=vpc-0cc23d990ea9b2ba9`가 빈 결과 — slash dev VPC에 NAT Gateway가 실제로 0개였다. 라우팅 테이블(`slash-private-app-rt-ap-northeast-2a/2c-dev`)의 `0.0.0.0/0` route는 존재하지 않는 NAT ID(`nat-0605f219892324e9a`, `nat-0f8ebb83909fbf50d`)를 계속 가리키며 `State: blackhole`로 남아 있어, private-app 서브넷(EKS 워크로드) 전체가 아웃바운드 인터넷 연결을 잃은 상태였다.
+
+CloudTrail로 `ResourceName=<natId>` 조회해 타임라인 확정:
+- `2026-08-18 08:48` a-student-09가 §11-2 상시운영 재구축 때 생성한 NAT 2개(§2 표에 기록된 그것).
+- `2026-08-20 22:24` **b-student-02**(다른 팀 `likelion-cloud6-team3` 소속)가 이 두 NAT를 `DeleteNatGateway`로 삭제. 같은 날 15:33~22:24 사이 b-student-02는 자기 팀 `lion-team3-dev-nat-*`(Owner=`likelion-cloud6-team3`, Project=`lion`) NAT를 반복적으로 생성/삭제하며 apply/destroy 사이클을 돌리고 있었다 — 그 와중에 slash 소유 NAT까지 같이 삭제된 것으로 보인다(의도적 조작 흔적 없음, 계정 공유로 인한 사고로 판단). slash 팀 EIP(`slash-nat-eip-ap-northeast-2a/2c-dev`)는 삭제되지 않고 미연결 상태로 남아 있었다.
+
+**조치**: `environments/dev/network`에서 `terraform plan` → drift 확인(NAT 2개 add, route 2개 update, **0 destroy** — state는 삭제 사실을 몰랐을 뿐 그 외엔 정합). `terraform apply`로 복구: 기존 EIP(`52.79.111.69`, `54.116.233.42`) 그대로 재사용해 새 NAT(`nat-0b04bad708207e27c` AZ-2a, `nat-07e630aaf45bfb021` AZ-2c) 생성, route가 자동으로 새 NAT ID로 갱신됨. 적용 후 `describe-nat-gateways`로 `available` 2개, route `active` 2개 재확인 완료 — 총 장애 지속 시간은 삭제 시점(8/20 22:24)부터 복구(8/21) 기준 약 반나절.
+
+**교훈**: 공유 계정에서는 `slash-` 접두사 리소스도 다른 팀의 실수(잘못된 스코프의 destroy/apply)로부터 완전히 안전하지 않다 — §18에서 다룬 "남의 non-slash 리소스를 건드리지 않기"의 반대 방향 리스크. NAT/EIP처럼 삭제·재생성만 가능한 리소스는 Terraform state가 drift를 정확히 잡아주므로(`0 to destroy`로 안전 확인 가능) 장애 시 우선 `terraform plan`으로 실제 삭제 여부를 판단하고 그대로 `apply`하면 된다. 재발 방지책(예: 공유 계정 삭제 권한 제한, 팀 간 공지)은 인프라 코드 변경 사항이 아니라 계정 운영 정책 문제라 이슈에서 팀에 공유만 하고 별도 후속은 만들지 않음.
