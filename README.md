@@ -183,7 +183,7 @@ kubeconfig 흔적이다.
 
 **장애 대응 테스트(게임 데이) 카탈로그**는 [docs/resilience-testing.md](docs/resilience-testing.md) 참고 — 실행 결과는 `operations-log.md`에 기록.
 
-**주말/공휴일에 09~21시 스케줄 밖에서 작업하고 싶다면** 수동 시작/종료 절차를 [docs/operations-log.md §12-2](docs/operations-log.md#12-2-스케줄-밖주말공휴일-야간에-수동으로-켜고-끄는-절차-2026-08-21) 참고 — 수동으로 켰다면 작업 끝나고 반드시 수동으로 꺼야 한다.
+**EKS 노드그룹/RDS/Ollama는 매일(주말 포함) 09~21시(KST)만 자동으로 켜져 있습니다**([docs/operations-log.md §12-3](docs/operations-log.md#12-3-0921시-스케줄을-평일에서-매일로-확대-2026-08-21)). 그 시간 외에 작업하고 싶다면 수동 시작/종료 절차를 [docs/operations-log.md §12-2](docs/operations-log.md#12-2-스케줄-밖0921시-외-야간에-수동으로-켜고-끄는-절차-2026-08-21-12-3으로-주말-포함-이후-갱신) 참고 — 수동으로 켰다면 작업 끝나고 반드시 수동으로 꺼야 한다.
 
 ## 관련 저장소
 

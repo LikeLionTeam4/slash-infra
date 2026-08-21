@@ -65,4 +65,9 @@ module "database" {
   # 전환되면(팀 합의 후) 이 오버라이드를 지워서 모듈 기본값(보호 켜짐)으로 되돌려야 한다.
   rds_deletion_protection = false
   rds_skip_final_snapshot = true
+
+  # 2026-08-21: 09~21시 가동을 평일(MON-FRI)에서 매일로 확대(operations-log.md §12-3 참고,
+  # eks/main.tf와 동일한 결정·사유).
+  schedule_start_cron = "cron(0 9 ? * * *)"
+  schedule_stop_cron  = "cron(0 21 ? * * *)"
 }

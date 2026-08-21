@@ -74,4 +74,10 @@ module "eks" {
   # ECR은 이제 modules/eks에 없다(2026-08-12, environments/bootstrap의 modules/ecr로 이전
   # — docs §6). local/eks 마이그레이션 때와 동일하게, dev/eks도 ECR을 만들지 않는다 —
   # 그래서 local과 이름 충돌 없이 그대로 apply된다.
+
+  # 2026-08-21: 09~21시 가동을 평일(MON-FRI)에서 매일로 확대하기로 결정(operations-log.md
+  # §12-3) — 팀원이 주말에도 작업하고 싶다는 요청. 모듈 기본값(MON-FRI)은 "평일만"이 맞는
+  # 일반적인 기본값이라 그대로 두고, 이 결정은 dev 환경에서만 명시적으로 오버라이드한다.
+  schedule_start_cron = "cron(0 9 ? * * *)"
+  schedule_stop_cron  = "cron(0 21 ? * * *)"
 }

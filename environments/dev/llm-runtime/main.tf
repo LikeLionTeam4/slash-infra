@@ -59,4 +59,9 @@ module "llm_runtime" {
   # 60~90% 절감보다 "업무시간에 못 켜질 수 있다"는 위험이 dev 팀 사용성에 더 크다고 판단 —
   # 09~21시 스케줄(schedule.tf)은 그대로 두고 On-Demand로 전환한다. 월 ~$60~85 -> ~$170.
   use_spot = false
+
+  # 2026-08-21: 09~21시 가동을 평일(MON-FRI)에서 매일로 확대(operations-log.md §12-3 참고,
+  # eks/database와 동일한 결정·사유).
+  schedule_start_cron = "cron(0 9 ? * * *)"
+  schedule_stop_cron  = "cron(0 21 ? * * *)"
 }

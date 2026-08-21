@@ -673,13 +673,13 @@ dev가 상시운영으로 전환되며 `local/network`(모듈 검증용 기반�
 
 **검증 결과**: dev의 EKS 범용 노드그룹·RDS가 평일 09~21시 KST에만 가동되도록 스케줄 적용 완료. 나머지(컨트롤플레인·NAT·Valkey·ALB)는 상시 유지 — 이번 라운드에서 손대지 않음.
 
-### 12-2. 스케줄 밖(주말·공휴일 야간)에 수동으로 켜고 끄는 절차 (2026-08-21)
+### 12-2. 스케줄 밖(09~21시 외 야간)에 수동으로 켜고 끄는 절차 (2026-08-21, §12-3으로 주말 포함 이후 갱신)
 
-"공휴일에 팀원이 작업하고 싶다면 어떻게 안내해야 하는지" 질문을 계기로 정리. 스케줄은 `cron(0 9/21 ? * MON-FRI *)`(Asia/Seoul)로 **요일만 보고 동작**한다 — 공휴일 캘린더를 인식하는 로직은 없다.
+**2026-08-21 갱신**: §12-3에서 스케줄을 평일(MON-FRI)에서 매일로 확대해서, 아래 "언제 수동 조치가 필요한가"의 주말 관련 서술은 더 이상 맞지 않는다 — **주말도 이제 09~21시엔 자동으로 켜져 있다.** 수동 조치가 필요한 건 이제 순수하게 "09~21시를 벗어난 시간(매일 21시~다음 날 09시)"뿐이다. 아래 명령어 자체(수동 시작/종료)는 그 경우 여전히 그대로 쓴다.
 
 **언제 수동 조치가 필요한가**:
-- **평일(월~금)인 공휴일**: 스케줄이 평소처럼 09시에 켜고 21시에 끄므로 **별도 조치 불필요** — 그냥 09~21시 안에서 쓰면 된다.
-- **주말이거나, 21시~09시 사이에 작업하고 싶을 때**: 스케줄이 그 시간대엔 아예 트리거되지 않으므로 수동으로 켜고, 작업이 끝나면 반드시 수동으로 꺼야 한다.
+- **09~21시 안(요일 무관, §12-3 이후)**: 스케줄이 매일 자동으로 켜고 끄므로 **별도 조치 불필요**.
+- **21시~09시 사이에 작업하고 싶을 때(요일 무관)**: 스케줄이 그 시간대엔 아예 트리거되지 않으므로 수동으로 켜고, 작업이 끝나면 반드시 수동으로 꺼야 한다.
 
 **수동 시작** (현재 값 기준 — 바뀌면 `environments/dev/eks`/`environments/dev/database`의 스케줄 변수 확인):
 
@@ -708,7 +708,27 @@ aws rds stop-db-instance --db-instance-identifier slash-rds-dev
 aws ec2 stop-instances --instance-ids i-0b4d2b109031a210f
 ```
 
-**왜 종료를 꼭 수동으로 해야 하는가**: 스케줄이 MON-FRI에만 걸려 있어서, 주말에 수동으로 켠 뒤 그대로 두면 꺼주는 트리거가 없다 — 안 끄면 다음 월요일 21시까지(최대 2박 3일 이상) 계속 켜진 채로 과금된다.
+**왜 종료를 꼭 수동으로 해야 하는가**: 스케줄이 09~21시(매일)에만 걸려 있어서, 21시 이후에 수동으로 켠 뒤 그대로 두면 다음 09시 전까지 꺼주는 트리거가 없다 — 안 끄면 최소 다음 날 09시까지, 최악의 경우(끄는 걸 계속 깜빡하면) 며칠이고 켜진 채로 과금된다.
+
+### 12-3. 09~21시 스케줄을 평일에서 매일로 확대 (2026-08-21)
+
+**결정**: 팀에서 "주말에도 09~21시는 켜두자"고 정해서, EKS 노드그룹·RDS·Ollama EC2 세 스케줄의 cron을 `MON-FRI`에서 매일로 바꿨다. §12에서 다뤘던 "NAT/ALB/EKS 컨트롤플레인/Valkey는 상시 유지, 나머지 셋만 스케줄 대상"이라는 구조 자체는 그대로 — 스케줄 대상 셋의 **가동 요일**만 넓어진 것.
+
+**구현**: 모듈 기본값(`modules/eks`, `modules/database`, `modules/llm-runtime`의 `variables.tf`)은 `MON-FRI` 그대로 두고, dev 환경 호출부에서만 명시적으로 오버라이드했다 — 모듈 기본값은 "평일만"이 여전히 합리적인 일반 기본값이고, "매일 가동"은 dev 팀의 개별 결정이라 환경 레벨에 남겨야 나중에 이 모듈을 재사용할 다른 환경(local/prod)이 의도치 않게 영향받지 않는다.
+- `environments/dev/eks/main.tf`, `environments/dev/database/main.tf`, `environments/dev/llm-runtime/main.tf`에 `schedule_start_cron = "cron(0 9 ? * * *)"` / `schedule_stop_cron = "cron(0 21 ? * * *)"` 추가.
+- EventBridge Scheduler cron은 day-of-month·day-of-week 중 하나만 `?`를 쓸 수 있다 — day-of-month는 이미 `?`라 day-of-week에 `*`(매일)를 그대로 쓸 수 있었다.
+
+**적용**: `eks`/`database`는 `terraform apply`로 정상 반영(각각 `2 to change, 0 to destroy`). `llm-runtime`은 계획에 스케줄 cron 2개 외에 **무관한 기존 drift**(`aws_instance.ollama`의 `user_data`)가 같이 잡혀서, 이번 작업 범위가 아니길래 `-target`으로 `aws_scheduler_schedule.ollama_start[0]`/`ollama_stop[0]` 두 개만 지정해서 적용을 시도했다.
+
+**의도와 다르게 동작함 — `-target`이 drift까지 같이 끌고 들어갔다**: 결과는 `2 to change`가 아니라 `0 added, 3 changed, 0 destroyed`. `aws_scheduler_schedule.ollama_start`의 IAM 역할에 붙은 인라인 정책(`aws_iam_role_policy.ollama_scheduler_ec2`)이 `aws_instance.ollama.arn`을 참조하고 있어서, `-target`이 의존성 해석 과정에서 `aws_instance.ollama`까지 실행 대상에 포함시켰고, 한 번 포함된 이상 그 리소스의 **다른 모든 대기 중인 변경사항**(이번 경우 `user_data`)도 같이 적용됐다. CloudTrail로 확인한 실제 순서: `StopInstances`(14:30:36 KST, terraform) → `ModifyInstanceAttribute`(userData, 14:35:19) → `StartInstances`(14:35:20) — `user_data`는 EC2 API가 인스턴스 정지 상태를 요구해서 AWS 프로바이더가 자동으로 stop→수정→start를 수행한 것. 약 5분간 Ollama 다운타임 발생.
+
+**다행히 자가복구됨**: §16에서 만들어둔 `ollama-warmup.service`가 부팅 시 자동 기동돼(`journalctl` 확인: 05:35:31 시작 → 05:36:10 `done_reason: load`) 재기동 후 약 39초 만에 모델이 다시 VRAM에 올라왔다. 게다가 이번에 강제로 적용된 `user_data`는 §16에서 SSM으로 이미 라이브 패치해뒀던 내용과 같아서(코드는 그때 갱신했지만 인스턴스엔 SSM으로만 반영하고 Terraform으로는 반영한 적이 없었음), 이번 일로 그 오래된 known drift가 오히려 해소됐다 — Terraform state와 실제 인스턴스가 이제 일치한다. Private IP(`10.8.11.172`)는 stop/start로는 안 바뀌므로 `helm/slash-llm/values-dev.yaml` 갱신도 불필요했다.
+
+**교훈**: `-target`은 "지정한 리소스만 건드린다"는 보장을 안 해준다 — 참조 관계(특히 IAM 정책의 ARN 참조처럼 값만 갖다 쓰는 것처럼 보이는 관계)를 타고 관련 없어 보이는 리소스까지 실행 대상에 끌려 들어갈 수 있고, 일단 포함되면 그 리소스의 다른 drift까지 통째로 적용된다. 기존 drift가 있는 리소스를 정말로 안 건드리고 싶다면 `-target`보다 먼저 `terraform plan`으로 어떤 리소스가 실행 대상에 포함되는지 확인하거나, 그 리소스에 `lifecycle { ignore_changes = [...] }`를 걸어두는 편이 안전하다.
+
+**비용 영향**: 스케줄 대상 셋의 가동 시간이 주 60h(평일만) → 주 84h(매일)로 늘어난다. §12 정가 계산(730h 기준 EKS 노드그룹 ~$130/월, RDS ~$50/월, Ollama ~$475/월)에 84/730 비율을 적용하면 각각 ~$64/~$26/~$238 — 상시 유지 항목(~$200/월, 변동 없음)까지 합쳐 대략 월 **~$434 → ~$528**, 약 **+$94/월** 증가로 추정.
+
+**검증**: `aws scheduler get-schedule`로 6개 스케줄(`slash-eks-node-start/stop-dev`, `slash-rds-start/stop-dev`, `slash-ollama-start/stop-dev`) 전부 `cron(... ? * * *)`로 바뀐 것 확인.
 
 ## 13. CloudWatch 알람 확장(ALB/Valkey) + CloudTrail 문서 정정 (2026-08-19)
 
