@@ -760,7 +760,7 @@ CloudWatch 대시보드(§15, PR #46) 이후 "RDS/ALB/Valkey는 보이는데 개
 
 **결론**: 이번 라운드는 코드 변경 없음, 문서 정정만 진행(`docs/resource-ownership.md` 신규 절, 본 항목). NAT Gateway·로드밸런서는 "stop" 개념이 없고(삭제/재생성만 가능) 팀 프로젝트 안정성 리스크가 커서 이번에도 스케줄 대상에서 제외하기로 함 — §12 결론과 동일.
 
-## 19. NAT Gateway 아웃바운드 장애 — 공유 계정 다른 팀이 실수로 삭제 (이슈 #55, 2026-08-21)
+## 19. NAT Gateway 아웃바운드 장애 — 공유 계정 다른 팀이 실수로 삭제 (이슈 #56, 2026-08-21)
 
 "NAT가 안 되는 것 같다"는 팀원 제보로 점검 시작.
 
@@ -773,3 +773,5 @@ CloudTrail로 `ResourceName=<natId>` 조회해 타임라인 확정:
 **조치**: `environments/dev/network`에서 `terraform plan` → drift 확인(NAT 2개 add, route 2개 update, **0 destroy** — state는 삭제 사실을 몰랐을 뿐 그 외엔 정합). `terraform apply`로 복구: 기존 EIP(`52.79.111.69`, `54.116.233.42`) 그대로 재사용해 새 NAT(`nat-0b04bad708207e27c` AZ-2a, `nat-07e630aaf45bfb021` AZ-2c) 생성, route가 자동으로 새 NAT ID로 갱신됨. 적용 후 `describe-nat-gateways`로 `available` 2개, route `active` 2개 재확인 완료 — 총 장애 지속 시간은 삭제 시점(8/20 22:24)부터 복구(8/21) 기준 약 반나절.
 
 **교훈**: 공유 계정에서는 `slash-` 접두사 리소스도 다른 팀의 실수(잘못된 스코프의 destroy/apply)로부터 완전히 안전하지 않다 — §18에서 다룬 "남의 non-slash 리소스를 건드리지 않기"의 반대 방향 리스크. NAT/EIP처럼 삭제·재생성만 가능한 리소스는 Terraform state가 drift를 정확히 잡아주므로(`0 to destroy`로 안전 확인 가능) 장애 시 우선 `terraform plan`으로 실제 삭제 여부를 판단하고 그대로 `apply`하면 된다. 재발 방지책(예: 공유 계정 삭제 권한 제한, 팀 간 공지)은 인프라 코드 변경 사항이 아니라 계정 운영 정책 문제라 이슈에서 팀에 공유만 하고 별도 후속은 만들지 않음.
+
+**다운스트림 영향 확인 — slash-api 401 로그인 루프**: 같은 시간대 [slash-api#56](https://github.com/LikeLionTeam4/slash-api/issues/56)(유효한 Cognito 토큰인데도 `/api/v1/me` 등이 401)이 별도로 보고돼 있었는데, `kubectl logs`로 원인이 이 NAT 장애였음을 확인했다 — `NimbusJwtDecoder`가 서명 검증용 Cognito JWKS(`cognito-idp.ap-northeast-2.amazonaws.com`, VPC 엔드포인트 없는 퍼블릭 인터넷 경로)를 fetch하지 못해 `ConnectException: Operation timed out`이 반복되고 있었다. NAT 복구 후 파드 안에서 `wget`으로 JWKS 엔드포인트가 `200 OK`로 정상 응답하는 것까지 확인, slash-api#56에 원인·해결 코멘트 남김. private-app 서브넷 아웃바운드 장애는 Ingress 트래픽(ALB→파드)엔 영향이 없어도 파드가 능동적으로 외부(Cognito, 외부 API 등)로 나가는 모든 경로를 끊는다는 점을 이번에 구체적 사례로 확인 — 다음에 "토큰은 멀쩡한데 401"류 증상이 보이면 NAT 상태부터 의심할 것.
