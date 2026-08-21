@@ -673,6 +673,43 @@ dev가 상시운영으로 전환되며 `local/network`(모듈 검증용 기반�
 
 **검증 결과**: dev의 EKS 범용 노드그룹·RDS가 평일 09~21시 KST에만 가동되도록 스케줄 적용 완료. 나머지(컨트롤플레인·NAT·Valkey·ALB)는 상시 유지 — 이번 라운드에서 손대지 않음.
 
+### 12-2. 스케줄 밖(주말·공휴일 야간)에 수동으로 켜고 끄는 절차 (2026-08-21)
+
+"공휴일에 팀원이 작업하고 싶다면 어떻게 안내해야 하는지" 질문을 계기로 정리. 스케줄은 `cron(0 9/21 ? * MON-FRI *)`(Asia/Seoul)로 **요일만 보고 동작**한다 — 공휴일 캘린더를 인식하는 로직은 없다.
+
+**언제 수동 조치가 필요한가**:
+- **평일(월~금)인 공휴일**: 스케줄이 평소처럼 09시에 켜고 21시에 끄므로 **별도 조치 불필요** — 그냥 09~21시 안에서 쓰면 된다.
+- **주말이거나, 21시~09시 사이에 작업하고 싶을 때**: 스케줄이 그 시간대엔 아예 트리거되지 않으므로 수동으로 켜고, 작업이 끝나면 반드시 수동으로 꺼야 한다.
+
+**수동 시작** (현재 값 기준 — 바뀌면 `environments/dev/eks`/`environments/dev/database`의 스케줄 변수 확인):
+
+```bash
+# EKS 노드그룹 (2~3분 소요)
+aws eks update-nodegroup-config --cluster-name slash-eks-dev --nodegroup-name slash-eks-general-dev \
+  --scaling-config minSize=2,maxSize=4,desiredSize=3
+
+# RDS
+aws rds start-db-instance --db-instance-identifier slash-rds-dev
+
+# Ollama(LLM), 필요할 때만
+aws ec2 start-instances --instance-ids i-0b4d2b109031a210f
+```
+
+NAT/ALB/EKS 컨트롤플레인/Valkey는 상시 유지 대상이라(§12 표) 손댈 필요 없음.
+
+**수동 종료 (작업 끝나면 반드시)**:
+
+```bash
+aws eks update-nodegroup-config --cluster-name slash-eks-dev --nodegroup-name slash-eks-general-dev \
+  --scaling-config minSize=0,maxSize=0,desiredSize=0
+
+aws rds stop-db-instance --db-instance-identifier slash-rds-dev
+
+aws ec2 stop-instances --instance-ids i-0b4d2b109031a210f
+```
+
+**왜 종료를 꼭 수동으로 해야 하는가**: 스케줄이 MON-FRI에만 걸려 있어서, 주말에 수동으로 켠 뒤 그대로 두면 꺼주는 트리거가 없다 — 안 끄면 다음 월요일 21시까지(최대 2박 3일 이상) 계속 켜진 채로 과금된다.
+
 ## 13. CloudWatch 알람 확장(ALB/Valkey) + CloudTrail 문서 정정 (2026-08-19)
 
 사용자 질문 두 가지를 계기로 진행: ① CloudTrail/CloudWatch가 실제로 적용돼 있는지 점검, ② 현재 진행 상황(ALB·ArgoCD 3서비스 상시운영 전환, §11)에 맞춰 CloudWatch 세팅도 맞출 것.
