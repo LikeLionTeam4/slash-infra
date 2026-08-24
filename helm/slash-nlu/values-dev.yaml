@@ -1,7 +1,7 @@
 # dev 환경 구축 진행 중(2026-08-12). slash-nlu는 외부 설정(DB/Secrets) 없이 자체
 # 완결적으로 동작해 image.tag 외에 다른 배선이 필요 없다.
 image:
-  tag: "sha-1b6cca6cb4b880ac65aa3f717fb9ac60bcc95aad"
+  tag: "sha-86bbfc9b565a0b27d3f4a6164d8a2cdf9e500bd0"
 
 replicaCount: 2
 
