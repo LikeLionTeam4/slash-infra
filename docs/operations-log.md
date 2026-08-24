@@ -864,3 +864,13 @@ CloudTrail로 `ResourceName=<natId>` 조회해 타임라인 확정:
 **범위 밖으로 남긴 것**: 이슈 #11의 `values-prod.yaml` 항목은 그대로 남아있다 — prod 환경 자체가 아직 미구축이라(§1) 이번 정리와 무관하게 prod 착수 시점에 처리할 일.
 
 **검증**: `values-local.yaml` 3개 외에 `mock-services`·`mock-` 문자열을 참조하는 코드가 더 없는지 전체 grep으로 재확인.
+
+## 22. RDS 관리형 비밀번호 자동 로테이션 시 파드가 옛 비밀번호로 고착되는 현상 확인 (2026-08-24)
+
+이슈 #63(EKS 접근권한) 작업으로 처음 `kubectl` 접근이 열린 직후 `kubectl get pods -A`로 dev 상태를 확인하다가 발견. `slash-api` 파드가 정상(2/2)보다 많은 4개가 떠 있었고, 그중 하나(42분 경과, 12회 재시작)가 계속 `CrashLoopBackOff` 직전 상태였다.
+
+**원인**: `kubectl logs --previous`로 확인한 실제 에러는 `FATAL: password authentication failed for user "slash_admin"`(Flyway 마이그레이션 단계에서 발생, HikariCP 커넥션 획득 실패). RDS가 AWS 관리형 마스터 비밀번호(`manage_master_user_password`)를 쓰고 있어 AWS가 주기적으로 자동 회전시키는데, `aws secretsmanager describe-secret`으로 확인한 결과 같은 날 16:08:28에 로테이션이 있었다. Kubernetes는 Pod의 환경변수(`envSecrets`, `secretKeyRef`)를 컨테이너 재시작 시 다시 읽지 않고 **Pod 생성 시점에 고정**하므로, 로테이션 시점 근처에 이미 떠 있던 파드는 컨테이너가 몇 번을 재시작해도 로테이션 이전 비밀번호로만 계속 접속을 시도해 영원히 실패한다. 같은 시간대 이후 새로 생성된 파드들은 갱신된 비밀번호를 받아 정상 기동했다(`Started SlashApiApplication in 11.685 seconds` 로그로 확인).
+
+**조치**: 코드·설정 변경 불필요 — 문제였던 파드를 확인해보니 조치 전에 이미 사라져 있었다(HPA가 4→2로 스케일다운하며 자연스럽게 정리된 것으로 추정). `slash-api` 2/2 정상 확인.
+
+**참고 — 재발 가능성**: 이번엔 우연히 그 로테이션 타이밍에 떠 있던 파드가 걸려서 드러났을 뿐, **로테이션이 있을 때마다 그 순간 떠 있는 파드는 구조적으로 이 문제에 노출**된다(External Secrets `refreshInterval: 1h`, `helm/slash-api/values-dev.yaml`). 재발 방지가 필요하면 Secret 값 변경 시 파드를 자동 재시작시키는 도구(예: Reloader) 도입이나 `refreshInterval` 단축을 검토할 수 있다 — 이번엔 범위 밖이라 기록만 남긴다. slash-api 저장소에도 같은 내용으로 이슈를 남겨 앱 쪽에서도 같은 증상(로그의 `password authentication failed`)을 다시 조사하지 않도록 했다.
