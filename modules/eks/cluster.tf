@@ -35,6 +35,18 @@ resource "aws_eks_cluster" "main" {
     endpoint_private_access = true
   }
 
+  # CONFIG_MAP(구버전) 단독으로는 aws-auth ConfigMap을 kubectl로 직접 고칠 수 있는
+  # 사람만 팀원 권한을 추가할 수 있어 닭과 달걀 문제가 생긴다(이슈 #63). API_AND_CONFIG_MAP은
+  # 기존 CONFIG_MAP 동작을 그대로 유지한 채 aws_eks_access_entry로 코드 관리를 추가하는
+  # 것뿐이라 되돌릴 수 없는 방향이어도 기존 접근을 끊지 않는다. AWS 정책상 API 단독 모드로는
+  # 못 건너뛰고 이 모드를 거쳐야 한다.
+  access_config {
+    authentication_mode = "API_AND_CONFIG_MAP"
+    # 기존 클러스터의 실제 값(true)을 그대로 명시해야 한다 — 비워두면 Terraform이
+    # "제거"로 해석해 클러스터 재생성을 유발한다(이 속성은 AWS provider에서 ForceNew).
+    bootstrap_cluster_creator_admin_permissions = true
+  }
+
   # 버전을 명시하지 않으면 AWS가 그 시점의 최신 지원 버전으로 생성한다 —
   # 특정 버전에 묶여 문서를 계속 갱신하지 않아도 되게.
 

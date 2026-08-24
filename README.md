@@ -110,6 +110,14 @@ terraform {
 
 리소스 하나하나 AWS 콘솔에서 찾아보지 않고 EKS 파드 상태를 한눈에 보려면 [Headlamp](https://headlamp.dev) 데스크톱 앱을 쓴다(검토 배경: 이슈 [#47](https://github.com/LikeLionTeam4/slash-infra/issues/47)/[#49](https://github.com/LikeLionTeam4/slash-infra/issues/49)). 클러스터에 아무것도 추가로 설치하지 않는 방식이라 비용은 $0.
 
+### 사전 준비 — kubectl 접근 권한 (이슈 [#63](https://github.com/LikeLionTeam4/slash-infra/issues/63))
+
+`slash-eks-dev`는 클러스터를 만든 IAM 사용자 외엔 기본적으로 `kubectl` 접근이 안 된다 — AWS
+API 권한(`aws eks describe-cluster` 등)과 Kubernetes RBAC 권한은 완전히 별개라, 계정을 팀이
+공유하는 것만으로는 부족하다. 본인 IAM 사용자가 `environments/dev/eks/terraform.tfvars`의
+`team_member_arns`에 등록돼 있어야 하며, 안 돼 있으면 담당자에게 추가를 요청한다(추가 방법은
+아래 "팀원 추가하기" 참고). 등록되면 별도 로그인 절차 없이 바로 접속된다.
+
 ### 설치 및 연결
 
 ```bash
@@ -135,10 +143,26 @@ kubeconfig 흔적이다.
 숫자가 다르면: 해당 디플로이먼트 클릭 → 파드 목록에서 `Running`이 아닌 파드 클릭 → 로그/Events로
 원인 확인. **ReplicaSet 목록은 안 봐도 된다** — 배포할 때마다 쌓이는 이력이라 대부분 `0/0`이 정상이다.
 
+### 팀원 추가하기
+
+새 팀원이나 아직 등록 안 된 팀원의 kubectl 접근을 열어주려면
+`environments/dev/eks/terraform.tfvars`(gitignore 대상 — 이 저장소가 public이라 팀원 IAM
+사용자명을 커밋하지 않는다. 형태는 같은 디렉터리의 `terraform.tfvars.example` 참고)의
+`team_member_arns`에 ARN을 추가한다.
+
+```bash
+cd environments/dev/eks
+# terraform.tfvars의 team_member_arns 목록에 ARN 추가 후
+terraform plan   # 반드시 먼저 확인 — destroy 없이 add/change만 있어야 정상
+terraform apply
+```
+
+권한은 `AmazonEKSClusterAdminPolicy`(클러스터 전체 admin)로 전원 동일하게 부여한다 — 조회
+전용 권한 분리는 아직 하지 않기로 함(이슈 #63 코멘트 참고).
+
 ### 참고
 
-- 계정을 팀 전체가 공유하는 구조라(위 §AWS CLI 프로필) 별도 로그인·OIDC·RBAC 설정 없이 바로
-  접속된다 — 검토 결과는 이슈 #49 참고.
+- kubectl 접근 권한은 위 "사전 준비" 참고(이슈 #63) — 계정 공유만으로는 자동 접속되지 않는다.
 - 관리형 AWS 서비스(RDS/ALB/Valkey) 상태는 별도 CloudWatch 대시보드에서 확인한다:
   `environments/dev/observability`에서 `terraform output dashboard_url`.
 
