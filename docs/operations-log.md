@@ -701,7 +701,7 @@ NAT/ALB/EKS 컨트롤플레인/Valkey는 상시 유지 대상이라(§12 표) �
 
 ```bash
 aws eks update-nodegroup-config --cluster-name slash-eks-dev --nodegroup-name slash-eks-general-dev \
-  --scaling-config minSize=0,maxSize=0,desiredSize=0
+  --scaling-config minSize=0,maxSize=1,desiredSize=0
 
 aws rds stop-db-instance --db-instance-identifier slash-rds-dev
 
@@ -816,6 +816,8 @@ CloudWatch 대시보드(§15, PR #46) 이후 "RDS/ALB/Valkey는 보이는데 개
 **정정 — Elastic IP 6개는 미사용이 아니었음**: `aws ec2 describe-addresses`에서 `InstanceId`가 전부 `None`이라 처음엔 "미연결 낭비 리소스"로 판단했다. `NetworkInterfaceId`로 재조회해보니 실제로는 NAT Gateway 2개, ALB(`k8s-default-slashapi`) 2개, RDS 퍼블릭 액세스용 ENI 2개에 각각 연결돼 있었다 — EC2에 붙는 EIP만 `InstanceId`로 잡히고 NAT/ALB/RDS ENI에 붙는 EIP는 `InstanceId`가 안 채워지는 게 원인. release 직전에 재확인해서 실제로 실행하진 않았지만, `InstanceId` 필드만 보고 "미연결"이라 단정하면 안 된다는 게 이번 교훈 — 확인하려면 `NetworkInterfaceId`까지 봐야 한다.
 
 **결론**: 이번 라운드는 코드 변경 없음, 문서 정정만 진행(`docs/resource-ownership.md` 신규 절, 본 항목). NAT Gateway·로드밸런서는 "stop" 개념이 없고(삭제/재생성만 가능) 팀 프로젝트 안정성 리스크가 커서 이번에도 스케줄 대상에서 제외하기로 함 — §12 결론과 동일.
+
+**정정(2026-08-24, 이슈 #61) — 위 ①의 "slash 소유 리소스는 이미 정상"은 틀렸다.** 그때 확인한 건 스케줄이 `ENABLED` 상태라는 것뿐이었지, 실제로 호출이 성공했는지는 CloudTrail로 확인하지 않았다. `#61`에서 CloudTrail(`UpdateNodegroupConfig`)을 직접 조회해보니 노드그룹 생성(08-18) 이후 21시 종료 시도가 **한 번도 성공한 적이 없었다** — `ScalingConfig.MaxSize=0`을 EKS API가 `InvalidParameterException`으로 거부하기 때문(`MinSize`/`DesiredSize`는 0 가능, `MaxSize`만 항상 1 이상이어야 하는 AWS 하드 제약). 09시 시작 호출은 `MaxSize`가 0이 아니라 매번 정상 성공했고, 노드 인스턴스 3대의 `LaunchTime`도 스케줄이 아니라 이슈 조사 중 수동 복구(08-21 22:34 KST)한 시각 그대로였다 — 즉 **①에서 "정상 동작"이라고 판단한 21시 무응답은 스케줄이 실제로 작동해서가 아니라 다른 이유였다.** 스케줄 존재 여부(`ENABLED`)만으로 실제 동작을 단정하면 안 된다는 게 이번 교훈 — 실행 이력까지 CloudTrail로 봐야 한다. 수정은 `modules/eks/schedule.tf`(`MaxSize=0`→`1`), 같은 버그를 예시로 갖고 있던 §12-2 수동 명령도 함께 고쳤다.
 
 ## 19. NAT Gateway 아웃바운드 장애 — 공유 계정 다른 팀이 실수로 삭제 (이슈 #56, 2026-08-21)
 

@@ -92,13 +92,19 @@ resource "aws_scheduler_schedule" "node_group_stop" {
     arn      = "arn:aws:scheduler:::aws-sdk:eks:updateNodegroupConfig"
     role_arn = aws_iam_role.node_group_scheduler[0].arn
 
+    # MaxSize는 0으로 못 내린다 — EKS managed node group API가 InvalidParameterException으로
+    # 거부한다(DesiredSize/MinSize만 0 가능, 스케일-투-제로 자체는 지원되지만 MaxSize는 항상
+    # 1 이상이어야 하는 AWS 하드 제약). 이 버그로 21시 종료가 노드그룹 생성 이후 한 번도
+    # 성공한 적이 없었다(2026-08-18~08-24, 이슈 #61 — CloudTrail로 매 시도 InvalidParameterException
+    # 확인, docs/operations-log.md §18의 "정상 동작" 결론은 그래서 오판이었다 — 정정은 같은 문서
+    # §18 정정 노트 참고).
     input = jsonencode({
       ClusterName   = aws_eks_cluster.main.name
       NodegroupName = aws_eks_node_group.general.node_group_name
       ScalingConfig = {
         DesiredSize = 0
         MinSize     = 0
-        MaxSize     = 0
+        MaxSize     = 1
       }
     })
   }
