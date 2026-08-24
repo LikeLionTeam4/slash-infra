@@ -67,6 +67,11 @@ ingress:
     # 그대로 재사용하면 됨. Route53 A레코드 연결은 그 시점에 마저 진행.
     alb.ingress.kubernetes.io/certificate-arn: arn:aws:acm:ap-northeast-2:061039804626:certificate/a3aefb70-9621-4e0b-b044-758bf91e943d
     alb.ingress.kubernetes.io/listen-ports: '[{"HTTPS":443}, {"HTTP":80}]'
+    # 어노테이션이 없으면 ALB Controller가 헬스체크 경로를 기본값 "/"로 잡는데, "/"는 인증이
+    # 필요해 항상 401 → Target.ResponseCodeMismatch로 unhealthy가 뜬다(이슈 #62). ALB가
+    # fail-open이라 실제 트래픽엔 영향 없었지만, 진짜 장애와 구분이 안 되는 문제였다.
+    # /actuator/health는 SecurityConfig의 PUBLIC_PATHS라 인증 없이 200을 낸다.
+    alb.ingress.kubernetes.io/healthcheck-path: /actuator/health
 
 replicaCount: 2
 
