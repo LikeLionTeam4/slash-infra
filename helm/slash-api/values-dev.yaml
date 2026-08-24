@@ -1,6 +1,6 @@
 # dev 환경 구축 진행 중(2026-08-12, network/cognito/database/eks/observability 적용 완료).
 image:
-  tag: "sha-40b7bc902fa4a74a98ad94374a463542261a2346"
+  tag: "sha-b42c2f6bb565c2a00341dbf7ebf571bfeef6b9ec"
 
 serviceAccount:
   # 2026-08-18 environments/dev/eks apply로 채움 (modules/eks/slash_api_irsa.tf, 이슈 #23/#24)
