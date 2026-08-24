@@ -5,16 +5,15 @@
 (`values-local.yaml`/`values-dev.yaml`/`values-prod.yaml`)로 분리.
 
 `local`은 CI/CD 자동화 대상이 아니다(§11) — `values-local.yaml`은 팀원이 직접
-`helm install`로 배선을 검증할 때만 쓴다. dev/prod는 ArgoCD가 이 디렉터리를 보고
-GitOps로 동기화할 예정(§9, 아직 미구축).
+`helm install`로 배선을 검증할 때만 쓴다. dev는 ArgoCD가 이 디렉터리를 보고
+GitOps로 상시 동기화 중(§9, §11); prod는 아직 미구축.
 
 ## 지금 상태
 
-실제 서비스 저장소(`slash-api`/`slash-nlu`/`slash-llm`)에 아직 Dockerfile이 없어서,
-`values-local.yaml`은 이 저장소의 `mock-services/`가 ECR에 push한 mock 이미지
-(`mock-20260811-amd64`)를 기본값으로 쓴다. 실제 Dockerfile/CI가 생기면 이 값을
-지우고, `values-dev.yaml`/`values-prod.yaml`처럼 CI가 커밋 SHA 태그로 채우는 방식으로
-바꾼다.
+세 서비스(`slash-api`/`slash-nlu`/`slash-llm`) 전부 실제 Dockerfile/CI가 갖춰졌고,
+`values-dev.yaml`은 각 저장소 CI가 커밋 SHA 태그(`sha-*`)로 계속 갱신한다.
+`values-local.yaml`도 mock 이미지에서 전환 완료(이슈 #11, 2026-08-24)했다 — local
+전용 빌드 파이프라인은 없어서, dev에서 검증된 태그를 그대로 재사용한다.
 
 ## 로컬에서 검증
 

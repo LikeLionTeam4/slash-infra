@@ -1,5 +1,6 @@
-# local은 CI/CD 대상이 아니다(§11) — 실제 Dockerfile이 아직 없어 mock 이미지로 배선만 검증한다.
+# local은 CI/CD 대상이 아니다(§11) — dev에서 검증된 실제 이미지를 그대로 재사용한다
+# (이슈 #11, 2026-08-24 mock에서 전환). 필요하면 values-dev.yaml의 최신 태그로 갱신할 것.
 image:
-  tag: mock-20260811-amd64
+  tag: "sha-86bbfc9b565a0b27d3f4a6164d8a2cdf9e500bd0"
 
 replicaCount: 1

@@ -20,7 +20,6 @@ environments/
   dev/                # prod와 거의 동일한 스펙을 유지하는 공유 테스트 서버 (아직 미구축)
   prod/               # 실제 운영 환경 (아직 미구축)
 helm/                 # slash-api/nlu/llm Helm chart (서비스별 디렉터리 + 환경별 values, ArgoCD가 볼 대상)
-mock-services/        # 실 서비스 Dockerfile이 없는 동안 ECR/EKS/Helm 파이프라인을 검증하는 placeholder 이미지
 ```
 
 local/dev/prod는 (같은 사람이 적용한다면) 같은 AWS 계정을 리소스명·태그로만 구분해 쓴다
@@ -66,7 +65,7 @@ terraform plan   # 유효한 AWS 자격증명 필요 (aws sts get-caller-identit
 ECR만 상시 적용 중(클러스터/ALB Controller/Helm chart는 apply→검증→destroy 완료, 재현 가능) —
 **EKS 컨트롤플레인이 월 ~$75로 지금까지 중 가장 비싸서 상시로 켜두지 않고 그때그때 검증 후
 정리하는 방식으로 진행 중**([docs/operations-log.md](docs/operations-log.md) §1 마스터 표 참고).
-`helm/README.md`, `mock-services/README.md`에 각각의 사용법이 정리되어 있다.
+`helm/README.md`에 사용법이 정리되어 있다.
 
 ## State 백엔드 + DNS 부트스트랩 (최초 1회)
 

@@ -189,7 +189,7 @@ slash-web → slash-api → slash-llm(EKS) → Ollama(EC2, EKS 밖) → 역순 �
 - 서비스별 ECR 리포지토리: `slash-api`, `slash-nlu`, `slash-llm`. `image_tag_mutability = IMMUTABLE` — 커밋 SHA 태그는 절대 안 바뀌니 덮어쓰기 자체를 막아둠.
 - **계정 전체가 공유하는 리소스라 `environments/bootstrap`이 소유한다(2026-08-12, `modules/eks`에서 이전).** local/dev/prod가 같은 이미지(`sha-` 태그)를 dev에서 검증 후 prod로 그대로 승격해가며 쓰는 구조(§9-3)라, 애초에 환경별 리소스가 아니다. 원래는 `modules/eks`(즉 `environments/local/eks`)가 만들고 있었는데, `environments/dev/eks`를 그대로 apply하면 같은 이름(`slash-api` 등)의 리포지토리를 또 만들려다 충돌했을 것 — state 버킷·Route53 zone과 같은 이유로 `bootstrap`으로 옮겨서 해소했다. 마이그레이션은 `terraform import`(bootstrap 쪽)+`terraform state rm`(local/eks 쪽)로 실제 AWS 리소스는 건드리지 않고 state 소유권만 이전, `terraform plan`으로 양쪽 다 "0 to destroy" 확인.
 - 수명주기 정책: 태그 없는 이미지는 7일 후, `sha-` 접두어 태그는 최근 10개만 남기고 자동 정리.
-- **`mock-` 접두어 태그는 예외**다(예: `mock-20260811`) — 실제 서비스 저장소에 Dockerfile/CI가 없던 시점에 클러스터 없이 ECR push 파이프라인만 먼저 검증하려고 만든 placeholder 이미지용(`slash-infra` 저장소 내 `mock-services/`). `sha-` 규칙(개수 기준)과 겹치지 않게 별도 규칙으로 push 후 3일 뒤 자동 정리한다 — 공유 계정에 방치되는 이미지가 안 남게 하기 위함. 각 서비스 저장소에 실제 Dockerfile/CI가 생기면 `mock-services/`와 이 규칙 둘 다 정리 대상.
+- ~~`mock-` 접두어 태그 예외 규칙~~ → 세 서비스 저장소 전부 실제 Dockerfile/CI가 갖춰져서 더 이상 필요 없어졌다 — `mock-services/`와 이 lifecycle 규칙 둘 다 정리 완료(2026-08-24, 이슈 #11).
 
 ## 7. 데이터베이스
 

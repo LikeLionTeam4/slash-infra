@@ -850,3 +850,17 @@ CloudTrail로 `ResourceName=<natId>` 조회해 타임라인 확정:
 **검토했다가 보류한 것 — `lifecycle { prevent_destroy = true }`**: NAT Gateway에 걸 수 있는지 검토했으나 (1) 오늘 사고는 애초에 우리 Terraform이 아니라 다른 팀의 AWS API 직접 호출이라 `prevent_destroy`로는 못 막았을 것이고, (2) `modules/network`가 dev(상시 유지)와 local(매 라운드 destroy되는 디스포저블 테스트베드)에서 같이 쓰이는데 `prevent_destroy`는 Terraform이 변수/표현식을 허용하지 않고 리터럴 `true`/`false`만 받아서(직접 `terraform validate`로 확인, `Variables not allowed` 에러) environment별 조건부 적용이 안 된다. 리소스를 이중 정의하는 우회는 route table 참조가 복잡해져서 보류 — 이번 위협엔 EventBridge 알림이 맞는 도구.
 
 **검증**: `terraform plan`(observability, `16 to add, 0 to change, 0 to destroy`) → apply 완료. `aws events list-rules --name-prefix slash-`로 규칙 6개 전부 `ENABLED` 확인.
+
+## 21. mock 이미지 정리 — 세 서비스 전부 실제 Dockerfile/CI 전환 완료 (이슈 #11, 2026-08-24)
+
+`values-local.yaml` 3개(api/nlu/llm)가 이슈 #11이 등록된 뒤로도 계속 `mock-*` 태그를 가리키고 있었다 — dev는 이미 실제 CI 태그(`sha-*`)로 전환됐는데 local만 안 따라간 상태. local이 지금 팀에서 실제로 쓰이고 있진 않지만(작업 우선순위 밖), 그대로 두면 `mock-services/`·ECR lifecycle 규칙까지 계속 안 지워지는 채로 남아 다음에 누가 이 코드를 보면 "아직 Dockerfile이 없나?"로 오해하게 된다.
+
+**조치**:
+- `values-local.yaml` 3개의 `image.tag`를 각 서비스 `values-dev.yaml`의 현재 태그로 교체(local 전용 빌드 파이프라인이 없어서 dev에서 검증된 이미지를 그대로 재사용) — api `sha-3d0eadaed6c5`, nlu `sha-86bbfc9b565a`, llm `sha-27d76da2bb1f`
+- `mock-services/`(api/nlu/llm mock Dockerfile 3개) 디렉터리 삭제 — 자체 README가 명시한 정리 시점("각 서비스 저장소에 실제 Dockerfile + CI가 생기면 삭제")이 충족됨
+- `modules/ecr/main.tf`의 `mock-` 접두어 lifecycle 규칙(3일 후 자동 정리) 삭제 — 더 이상 mock 태그를 push할 데가 없음
+- `README.md`/`helm/README.md`/`docs/aws-architecture.md`의 mock-services 관련 서술도 현재 상태에 맞게 정정
+
+**범위 밖으로 남긴 것**: 이슈 #11의 `values-prod.yaml` 항목은 그대로 남아있다 — prod 환경 자체가 아직 미구축이라(§1) 이번 정리와 무관하게 prod 착수 시점에 처리할 일.
+
+**검증**: `values-local.yaml` 3개 외에 `mock-services`·`mock-` 문자열을 참조하는 코드가 더 없는지 전체 grep으로 재확인.
