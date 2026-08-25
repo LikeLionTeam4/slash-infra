@@ -31,7 +31,7 @@ AWS 계정에 실제로 떠 있는 리소스 정리, 2026-08-24 기준. 설계 �
 
 - NAT Gateway: AZ당 1개씩 이중화
 - private-db 서브넷: 인터넷 경로 없음, S3만 Gateway Endpoint로 예외 허용
-- 보안그룹 3개: EKS용 / DB용(EKS SG에서만 인바운드 허용) / Ollama EC2용
+- 보안그룹 3개: EKS용 / DB용(EKS SG에서만 인바운드 허용) / Ollama EC2용(현재 미사용 — 컴퓨트 항목 참고)
 
 ## 컴퓨트
 
@@ -40,7 +40,7 @@ AWS 계정에 실제로 떠 있는 리소스 정리, 2026-08-24 기준. 설계 �
 - 클러스터 `slash-eks-dev` (v1.36), 관리형 노드그룹 `t3.medium` 3대 (desired 3 / min 2 / max 4)
 - Karpenter 설치 완료, 다만 현재 노드는 전부 관리형 노드그룹 소속 — 실제 오토스케일링 트리거 이력은 아직 없음
 - 클러스터 위 GitOps로 설치된 구성요소: ArgoCD, AWS Load Balancer Controller, External Secrets Operator, metrics-server
-- **비용 관리**: EventBridge Scheduler로 매일 09시~21시(KST)만 desired 3, 그 외 시간대는 desired/min 0으로 축소 (RDS도 동일 방식, 데이터베이스 항목 참고) — 24시간 상시 가동 대비 절반 이상 절감
+- **비용 관리**: EventBridge Scheduler로 매일 09시~21시(KST)만 desired 3, 그 외 시간대는 desired/min 0으로 축소 (RDS도 동일 방식, 데이터베이스 항목 참고) — 작성 시점엔 `MaxSize:0`이 AWS API에서 거부돼 실제로는 한 번도 성공한 적 없었음(이슈 #61), 같은 날 오후 수정 완료(현재는 정상 작동)
 
 **배포 서비스 상태**
 
@@ -48,11 +48,10 @@ AWS 계정에 실제로 떠 있는 리소스 정리, 2026-08-24 기준. 설계 �
 | --- | --- |
 | slash-api | 정상 (2 replica, Healthy) |
 | slash-nlu | 정상 (2 replica, Healthy) |
-| slash-llm | Ready 안 됨 (1 replica, Progressing) |
 
-slash-llm은 현재 기능상 연결되는 부분이 없어 Ollama EC2(`g4dn.xlarge`)를 정지시켜둔 상태 —
-readiness(`/ready`)가 Ollama 연결 여부를 그대로 반영해 503을 주는 것으로, 버그가 아니라
-의도된 상태. 다시 쓸 때 EC2만 켜면 정상화됨.
+**2026-08-25 갱신**: `slash-llm`은 제품 방향 전환(slash-docs#3, 클라우드 LLM 미사용 결정)에 따라
+EKS 배포 자체를 제거했습니다. Ollama EC2도 함께 destroy — 코드는 `modules/llm-runtime`,
+`helm/slash-llm`에 남아있어 필요시 복원 가능합니다. 상세: operations-log.md §23.
 
 ## 컨테이너 레지스트리
 
@@ -63,14 +62,18 @@ ECR 리포지토리 3개, 전부 태그 불변(IMMUTABLE) 설정 — 배포 이�
 | --- | --- |
 | `slash-api` | `sha-3d0eadae` |
 | `slash-nlu` | `sha-69c6708f` |
-| `slash-llm` | `sha-27d76da2` |
+
+`slash-llm` 리포지토리는 계속 존재하지만(과거 이미지 보관용) 현재 클러스터에 배포된 태그는
+없습니다(위 컴퓨트 항목 참고). 표에 있던 태그값들은 08-24 시점 스냅샷이라 이후 배포로 이미
+바뀌었을 수 있습니다 — 정확한 현재값은 `kubectl get deployment -o jsonpath=...`로 그때그때
+확인하는 걸 권장합니다.
 
 ## 데이터베이스
 
 - **RDS**: PostgreSQL 16 계열(`db.t4g.small`, Multi-AZ) 1개, 스토리지 20GB에서 필요시 자동 확장
 - **Valkey (ElastiCache)**: `cache.t4g.micro`, 상시 가동
 - 둘 다 private-db 서브넷 배치, EKS 내부에서만 접근 가능하며 외부 미노출
-- **비용 관리**: RDS는 EKS 노드그룹과 동일하게 매일 09시~21시(KST)만 기동, 나머지 시간은 정지 (Valkey는 상시 가동, Ollama EC2만 자동 스케줄 없이 수동 운영 — 컴퓨트 항목 참고)
+- **비용 관리**: RDS는 EKS 노드그룹과 동일하게 매일 09시~21시(KST)만 기동, 나머지 시간은 정지 (Valkey는 상시 가동). Ollama EC2는 2026-08-25 제거됨(위 컴퓨트 항목 참고)
 
 ## 인그레스 / 도메인
 
@@ -88,6 +91,14 @@ CloudWatch 알람 7개, 확인 시점 기준 전부 정상 범위:
 - Valkey: CPU, 메모리, eviction
 
 별도 대시보드로 통합 확인 가능, 알람 발생 시 SNS 경유로 이메일 통보.
+
+**2026-08-25 추가**:
+- **EKS 접근권한 코드화**(이슈 #63) — 클러스터 생성자 외 팀원은 kubectl 접근이 안 되던 문제를
+  `aws_eks_access_entry`로 해결, 팀원 4명 코드로 관리
+- **bootstrap state를 S3로 이전**(이슈 #66) — `environments/bootstrap`(CloudTrail·Route53·ECR·
+  Budgets) state가 특정 컴퓨터에만 있던 문제 해결
+- **EKS 컨트롤플레인 로그**(이슈 #44) — audit/authenticator 로그를 CloudWatch Logs로 연동,
+  보존기간 30일
 
 ## CI/CD
 
