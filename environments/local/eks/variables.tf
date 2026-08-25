@@ -12,3 +12,9 @@ variable "eks_security_group_id" {
   description = "environments/local/network output의 eks_security_group_id"
   type        = string
 }
+
+variable "team_member_arns" {
+  description = "이슈 #63 access entry 검증용 — 테스트 대상 IAM ARN 목록"
+  type        = list(string)
+  default     = []
+}

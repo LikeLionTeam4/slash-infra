@@ -42,4 +42,6 @@ module "eks" {
   vpc_id                 = var.vpc_id
   private_app_subnet_ids = var.private_app_subnet_ids
   eks_security_group_id  = var.eks_security_group_id
+
+  team_member_arns = var.team_member_arns
 }

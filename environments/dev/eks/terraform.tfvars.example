@@ -1,0 +1,6 @@
+# 실제 값으로 채운 뒤 terraform.tfvars로 복사해서 쓴다 (커밋 금지 — .gitignore 처리됨).
+# 이슈 #63 — team_member_arns는 kubectl 접근을 허용할 팀원 IAM 사용자/역할 ARN 목록.
+
+team_member_arns = [
+  "arn:aws:iam::<ACCOUNT_ID>:user/<IAM_USERNAME>",
+]

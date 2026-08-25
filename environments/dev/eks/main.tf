@@ -80,4 +80,6 @@ module "eks" {
   # 일반적인 기본값이라 그대로 두고, 이 결정은 dev 환경에서만 명시적으로 오버라이드한다.
   schedule_start_cron = "cron(0 9 ? * * *)"
   schedule_stop_cron  = "cron(0 21 ? * * *)"
+
+  team_member_arns = var.team_member_arns
 }
