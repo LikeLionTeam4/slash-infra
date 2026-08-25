@@ -46,6 +46,12 @@ variable "node_max_size" {
   default = 4
 }
 
+variable "log_retention_days" {
+  description = "EKS 컨트롤플레인 로그(CloudWatch Logs) 보존 기간 — 짧게 잡아 비용 최적화. 장기 보관이 필요해지면(prod, 개인정보처리시스템 접속기록 보관 의무 등) 환경별로 오버라이드"
+  type        = number
+  default     = 30
+}
+
 variable "tags" {
   description = "모든 리소스에 붙일 공통 태그"
   type        = map(string)
