@@ -155,7 +155,16 @@ flowchart TB
 - ALB Ingress Controller(§8)도 같은 이유로 이번 조각엔 없음 — Helm 설치는 GitOps, IRSA Role은 그 조각에서 준비.
 - **`metrics-server`도 설치돼 있다**(2026-08-18, `helm list` 확인 — Karpenter/ALB Controller/External Secrets와 같은 날 GitOps로 설치됨). `kubectl top pod`/HPA 전제조건은 충족된 상태지만, 클러스터 내부용 순간 스냅샷일 뿐 CloudWatch로는 안 나가고 이력도 안 남는다 — CloudWatch로 파드 지표를 보내는 방식(Container Insights vs Prometheus/Grafana)은 별도로 검토 중([이슈 #47](https://github.com/LikeLionTeam4/slash-infra/issues/47)).
 
-### 5-1. LLM 추론 런타임 (Ollama, EC2 — EKS 밖)
+### 5-1. LLM 추론 런타임 (Ollama, EC2 — EKS 밖) — **정리됨(2026-08-25)**
+
+> **이 섹션은 과거 기록입니다.** 제품 방향이 "클라우드에서 LLM을 직접 제공하지 않는다"로
+> 전환되며([slash-docs#3](https://github.com/LikeLionTeam4/slash-docs/issues/3)) GPU/Ollama
+> 경로가 폐기됐다 — `slash-api`의 `SUMMARY_ENGINE` 기본값이 `EXTRACTIVE`(CPU 기반
+> `slash-nlu` 경유)로 확정되며 `LLM_SERVICE`(GEMMA) 경로는 코드상 도달 불가능한 상태가
+> 됐고(라이브 코드 검증 완료), 이에 따라 Ollama EC2·`slash-llm` EKS 배포·관련 배선을
+> 전부 destroy했다. 코드(`modules/llm-runtime`, `helm/slash-llm`)는 git에 남겨뒀다 —
+> 필요해지면 `terraform apply` 한 번으로 복원 가능(모델 재다운로드 등 전부 자동화돼
+> 있음, user_data.sh.tpl 참고). 아래는 당시 구축 과정의 기록.
 
 **결정(2026-08-13, [이슈 #12](https://github.com/LikeLionTeam4/slash-infra/issues/12)): GPU 노드그룹 대신 독립 EC2 1대에 Ollama+Gemma3를 직접 설치한다.** 2026-08-12에는 `g4dn.xlarge` Spot + Karpenter 0-scale을 추천안으로 뒀었으나 아래 두 이유로 뒤집었다:
 

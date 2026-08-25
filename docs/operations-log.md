@@ -874,3 +874,25 @@ CloudTrail로 `ResourceName=<natId>` 조회해 타임라인 확정:
 **조치**: 코드·설정 변경 불필요 — 문제였던 파드를 확인해보니 조치 전에 이미 사라져 있었다(HPA가 4→2로 스케일다운하며 자연스럽게 정리된 것으로 추정). `slash-api` 2/2 정상 확인.
 
 **참고 — 재발 가능성**: 이번엔 우연히 그 로테이션 타이밍에 떠 있던 파드가 걸려서 드러났을 뿐, **로테이션이 있을 때마다 그 순간 떠 있는 파드는 구조적으로 이 문제에 노출**된다(External Secrets `refreshInterval: 1h`, `helm/slash-api/values-dev.yaml`). 재발 방지가 필요하면 Secret 값 변경 시 파드를 자동 재시작시키는 도구(예: Reloader) 도입이나 `refreshInterval` 단축을 검토할 수 있다 — 이번엔 범위 밖이라 기록만 남긴다. slash-api 저장소에도 같은 내용으로 이슈를 남겨 앱 쪽에서도 같은 증상(로그의 `password authentication failed`)을 다시 조사하지 않도록 했다.
+
+## 23. GPU/클라우드 LLM 인프라 정리 — Ollama EC2·slash-llm 배포 destroy (2026-08-25)
+
+`slash-llm`이 129분째 Not Ready인 걸 발견해 조사하다가(`/ready` 503 반복, `kubectl logs`로 확인), Ollama EC2가 `stopped` 상태인데 **시작/종료 EventBridge 스케줄 자체가 한 번도 apply된 적이 없었다**는 걸 함께 발견했다(`terraform state list` 결과 0개, `modules/llm-runtime/schedule.tf`엔 있는데 실제로 만들어진 적이 없음 — EKS·RDS 스케줄과 달리 이것만 빠져 있었다). 처음엔 "스케줄 버그를 고쳐서 복구"를 계획했으나, 그 전에 "애초에 이 경로가 지금도 쓰이는 게 맞나"를 다시 확인했다.
+
+**제품 방향 재확인 — 이미 폐기된 경로였다**: [slash-docs#3](https://github.com/LikeLionTeam4/slash-docs/issues/3)(2026-08-20)에서 "Slash의 핵심 가치는 클라우드에서 LLM을 직접 제공하는 것이 아니다"로 제품 방향이 바뀌어 있었다. `slash-api` 코드를 직접 검증(`TaskService.resolveExecutionTarget`/`routeToBackend`)한 결과:
+- `TEXT_SUMMARY_RUNNER_ENABLED`(기본 `false`, 오늘자 커밋 `b42c2f6`으로 재확인)와 `SUMMARY_ENGINE`(기본 `EXTRACTIVE`, 커밋 `e742675`)이 이중으로 GPU 경로를 막고 있었다
+- `helm/slash-api/values-*.yaml` 전체를 grep해도 이 두 값을 오버라이드하는 환경이 하나도 없음 — dev도 예외 아님
+- `LlmClient`/`routeToLlm`(GPU 호출 코드)은 삭제되지 않았지만 `SUMMARY_ENGINE=GEMMA`로 명시적으로 바꾸지 않는 한 도달 불가능한 dead code
+- `slash-web`/`slash-runner`도 클라우드 LLM을 직접 호출하는 경로가 없음(코드 확인)
+
+즉 **129분 다운타임은 실제 장애가 아니었다** — 이미 아무도 안 쓰는 경로였다. 라이브로도 `slash-api`/`slash-nlu` 둘 다 정상(각 2/2)이고 `NLU_BASE_URL` 배선 확인, 이게 요약 기능을 실제로 처리하고 있음을 재확인했다.
+
+**조치 — 스케줄 복구 대신 자원 자체를 정리**:
+- `environments/dev/llm-runtime` `terraform destroy`(`0 to add, 0 to change, 4 to destroy` 확인 후) — EC2·EBS(자동)·IAM Role/Instance Profile 전부 제거. 볼륨엔 재다운로드 가능한 것(OS/Ollama/모델)만 있어 데이터 유실 아님(`user_data.sh.tpl`이 재부팅 시 전부 자동 재설치하도록 이미 짜여 있음)
+- `slash-llm` ArgoCD Application을 클러스터에서 직접 삭제(`kubectl delete application`) — `prune: true`인데도 하위 리소스(Deployment/Service/HPA/SA)는 cascade 안 돼서 별도로 수동 정리
+- `argocd/applications-dev/slash-llm.yaml`, `argocd/applications/slash-llm.yaml`, `helm/slash-api/values-dev.yaml`의 `LLM_BASE_URL` 제거
+- `docs/aws-architecture.md` §5-1에 정리 사실과 사유를 상단에 명시(과거 기록으로 표시, 원문은 보존)
+
+**남겨둔 것**: `modules/llm-runtime`, `helm/slash-llm` 코드 자체는 삭제하지 않았다 — 필요해지면 `terraform apply` 한 번으로 복원 가능(모델 재다운로드 등 user_data가 전부 자동화). Ollama용 보안그룹(`modules/network` 소유)은 비용이 없는 리소스라 이번엔 그대로 둠. `#37`(GPU 오토스케일링 검토)은 대상 자체가 없어져 이번 기회에 닫는 게 맞아 보임 — 별도 확인 후 처리.
+
+**교훈**: "고쳐야 할 버그"로 보였던 게 실은 "이미 안 쓰는 자원이라 아무도 안 챙긴 것"이었다 — 인프라 이상을 발견했을 때 반사적으로 "복구"부터 하지 말고, 그 자원이 지금도 제품에 필요한지부터 코드 레벨로 재확인하는 게 먼저라는 걸 이번에 실제로 겪었다.
