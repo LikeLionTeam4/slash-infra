@@ -10,10 +10,17 @@ terraform {
     }
   }
 
-  # 이 루트는 다른 모든 환경이 쓸 state 백엔드(S3 버킷)를 직접 만드는 부트스트랩이라
-  # 아직 참조할 backend가 없다 — local state로 관리한다. apply 후 .terraform 디렉터리와
-  # terraform.tfstate는 안전한 곳에 백업해둘 것 (유실 시 버킷 이름은 계정 ID로 결정되는
-  # 값이라 terraform import로 복구 가능).
+  # 최초 apply 시점엔 이 루트가 다른 모든 환경이 쓸 state 백엔드(S3 버킷)를 직접
+  # 만드는 부트스트랩이라 참조할 backend가 없어 local state로 시작했다. 이제 그
+  # 버킷이 이미 존재하므로 자기 자신이 만든 버킷을 재사용해 S3로 옮긴다(이슈 #66)
+  # — local state가 특정 컴퓨터에만 있어 다른 팀원은 이 환경을 관리할 수 없던 문제.
+  backend "s3" {
+    bucket       = "slash-tfstate-061039804626"
+    key          = "bootstrap.tfstate"
+    region       = "ap-northeast-2"
+    encrypt      = true
+    use_lockfile = true
+  }
 }
 
 provider "aws" {

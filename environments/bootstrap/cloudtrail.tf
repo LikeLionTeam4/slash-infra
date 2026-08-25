@@ -96,6 +96,11 @@ resource "aws_cloudtrail" "main" {
   is_multi_region_trail         = false
   include_global_service_events = true
   enable_logging                = true
+  # 로그 파일 다이제스트로 사후 변조 여부를 검증할 수 있게 — 무료, 인프라 변경 없음.
+  # S3 Object Lock(불변 저장)은 버킷 생성 시점에만 켤 수 있어 지금은 적용 불가(기존
+  # 90일치 감사 로그가 있는 버킷을 재생성해야 함) — 다음에 버킷을 새로 만들 일이
+  # 생기면 그때 같이 검토.
+  enable_log_file_validation = true
 
   tags = merge(local.tags, { Service = "cloudtrail" })
 
