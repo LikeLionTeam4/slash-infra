@@ -47,6 +47,12 @@ resource "aws_eks_cluster" "main" {
     bootstrap_cluster_creator_admin_permissions = true
   }
 
+  # audit/authenticator만 우선 활성화(이슈 #44) — "누가 클러스터 API에 접근했는지"
+  # 감사 목적. api/controllerManager/scheduler는 지금 필요성이 낮아 비용상 보류.
+  # aws_cloudwatch_log_group.eks_cluster를 먼저 만들어야 EKS가 무기한 보존으로
+  # 로그 그룹을 자동 생성하는 걸 막을 수 있다(logging.tf 참고).
+  enabled_cluster_log_types = ["audit", "authenticator"]
+
   # 버전을 명시하지 않으면 AWS가 그 시점의 최신 지원 버전으로 생성한다 —
   # 특정 버전에 묶여 문서를 계속 갱신하지 않아도 되게.
 
@@ -54,7 +60,10 @@ resource "aws_eks_cluster" "main" {
     Name = "${var.name_prefix}-eks-${var.environment}"
   })
 
-  depends_on = [aws_iam_role_policy_attachment.cluster_eks_policy]
+  depends_on = [
+    aws_iam_role_policy_attachment.cluster_eks_policy,
+    aws_cloudwatch_log_group.eks_cluster,
+  ]
 }
 
 # ---- IRSA용 OIDC Provider ----
