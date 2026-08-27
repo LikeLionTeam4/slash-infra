@@ -1,84 +1,154 @@
-# infra
+# slash-infra
 
-Slash AWS 인프라. 역할별 재사용 모듈(`modules/`)과 이를 조합하는 환경(`environments/`)으로 나눈다.
+**Slash** — 자연어로 PC 작업을 지시하는 서비스 — 를 올리는 AWS 인프라 저장소. Terraform으로
+역할별 재사용 모듈(`modules/`)을 만들고, 환경(`environments/`)에서 조합해 적용한다.
+애플리케이션 배포는 Helm 차트(`helm/`) + ArgoCD(GitOps)로 별도 관리한다.
+
+## 목차
+
+- [개요](#개요)
+- [저장소 구조](#저장소-구조)
+- [기술 스택](#기술-스택)
+- [환경 현황](#환경-현황)
+- [시작하기](#시작하기)
+- [State 백엔드 + DNS 부트스트랩 (최초 1회)](#state-백엔드--dns-부트스트랩-최초-1회)
+- [dev 클러스터 상태 확인 (Headlamp)](#dev-클러스터-상태-확인-headlamp)
+- [다른 AWS 계정에서 시작하기 (팀원용)](#다른-aws-계정에서-시작하기-팀원용)
+- [문서 맵](#문서-맵)
+- [관련 저장소](#관련-저장소)
+
+## 개요
+
+Slash 백엔드 서비스군(`slash-api`/`slash-nlu`/`slash-llm`)과 프론트엔드(`slash-web`)가
+올라가는 AWS 인프라 전체를 코드로 정의한다. `slash-runner`(사용자 PC에서 로컬 실행)는
+AWS 범위 밖이라 이 저장소가 다루지 않는다.
+
+```mermaid
+flowchart LR
+    U["사용자 브라우저"] -->|HTTPS| CF["CloudFront\ndev.sbsh.cloud"]
+    U -->|HTTPS| ALB["ALB\napi.dev.sbsh.cloud"]
+    ALB --> EKS["EKS (slash-api/nlu/llm)\nArgoCD GitOps"]
+    EKS --> RDS[("RDS PostgreSQL")]
+    EKS --> VALKEY[("Valkey")]
+    EKS --> OLLAMA["Ollama EC2\n(GPU, EKS 밖)"]
+    U <-.->|Hosted UI| COG["Cognito"]
+```
+
+전체 토폴로지와 설계 근거는 [`docs/aws-architecture.md`](docs/aws-architecture.md), 요청
+한 건이 실제로 어떤 경로를 타는지는 [`docs/user-flow.md`](docs/user-flow.md) 참고.
+
+**공유 계정 주의**: AWS 계정은 부트캠프 여러 팀·수강생이 함께 쓴다. 리소스명에
+`slash-` 접두사를 빠뜨리면 다른 팀 리소스와 섞인다 — 자세한 배경은
+[`docs/resource-ownership.md`](docs/resource-ownership.md) "계정 자체가 공유 강의용
+계정" 절 참고.
+
+## 저장소 구조
 
 ```
 modules/
-  frontend-hosting/  # S3 + CloudFront + ACM + Route53 — 정적 프론트엔드 호스팅
-  network/           # VPC + 3-tier 서브넷 + SG(EKS/DB) + S3 Gateway Endpoint + VPC Flow Log
-  eks/               # EKS 클러스터 + 범용 노드그룹 + IRSA(OIDC) + Karpenter Role + ALB Controller Role + ECR
-  database/          # RDS PostgreSQL + Valkey(ElastiCache) + Secrets Manager
-  observability/     # CloudWatch 알람(RDS CPU/스토리지) + SNS 알림
+  network/             VPC + 3-tier 서브넷(public/private-app/private-db) + SG + S3 Gateway Endpoint + VPC Flow Log
+  eks/                 EKS 클러스터 + 관리형 노드그룹 + IRSA(OIDC) + Karpenter/ALB Controller Role + ECR 참조
+  database/            RDS PostgreSQL(Multi-AZ) + Valkey(ElastiCache) + Secrets Manager
+  llm-runtime/          Ollama용 GPU EC2(g4dn.xlarge) — EKS 밖 독립 인스턴스
+  cognito/              Cognito Hosted UI (EMAIL_OTP, OAuth2 code+PKCE)
+  observability/        CloudWatch 알람(RDS/ALB/Valkey) + SNS
+  frontend-hosting/     S3 + CloudFront + ACM + Route53 (slash-web 정적 호스팅)
+  ecr/                   서비스별 ECR 리포지토리(IMMUTABLE 태그)
+  backend-cicd/          GitHub OIDC → ECR push용 IAM Role (서비스별)
+  frontend-cicd/         GitHub OIDC → S3/CloudFront 배포용 IAM Role
 environments/
-  bootstrap/          # state용 S3 버킷 + Route53 hosted zone + CloudTrail (계정당 최초 1회만 apply)
-  local/              # 개인 맥북에서 배포하는 실험용 환경
-    frontend/         # frontend-hosting 모듈을 local 값으로 조합
-    network/          # network 모듈을 local 값으로 조합 (NAT 1개로 비용 절감)
-    eks/              # eks 모듈을 local 값으로 조합 (ECR만 적용 중 — 클러스터는 검증 후 destroy, 운영 로그 참고)
-    database/         # database 모듈을 local 값으로 조합 (아직 미적용, Multi-AZ 비활성으로 비용 절감)
-    observability/    # observability 모듈을 local 값으로 조합 (아직 미적용)
-  dev/                # prod와 거의 동일한 스펙을 유지하는 공유 테스트 서버 (아직 미구축)
-  prod/               # 실제 운영 환경 (아직 미구축)
-helm/                 # slash-api/nlu/llm Helm chart (서비스별 디렉터리 + 환경별 values, ArgoCD가 볼 대상)
+  bootstrap/            state용 S3 버킷 + Route53 zone + CloudTrail + ECR + backend-cicd Role (계정당 최초 1회)
+  local/                개인 실험용 — 대부분 destroy됨, eks만 모듈 검증 테스트베드로 상시 재사용
+  dev/                  prod와 거의 동일한 스펙, 상시 운영 중(2026-08-18~)
+  prod/                 미구축
+helm/                   slash-api/nlu/llm Helm 차트 (서비스별 디렉터리 + 환경별 values, ArgoCD가 감시)
+argocd/                 ArgoCD Application 매니페스트
+external-secrets/       External Secrets Operator 설정 (Secrets Manager → K8s Secret 동기화)
+karpenter/               Karpenter NodePool/EC2NodeClass 매니페스트
+docs/                   아키텍처·보안·운영·리소스 소유권·기술 스택 등 설계·운영 문서
 ```
 
-local/dev/prod는 (같은 사람이 적용한다면) 같은 AWS 계정을 리소스명·태그로만 구분해 쓴다
-(부트캠프 공유 계정이라 `slash-` 접두사를 꼭 붙일 것 — 자세한 배경은
-[docs/aws-architecture.md](docs/aws-architecture.md) §2, §11 참고). **단, 부트캠프 계정은
-사람마다 따로 발급되기 때문에 팀원끼리는 서로 다른 AWS 계정을 쓰게 된다** — 이 문서의
-예시 리소스 ID(버킷 이름, zone ID 등)는 특정 계정 하나에서 실습한 결과일 뿐이고, 다른
-계정에서 시작하는 방법은 아래 [다른 AWS 계정에서 시작하기](#다른-aws-계정에서-시작하기-팀원용) 참고.
+각 환경 디렉터리는 독립된 Terraform state를 가진다 — 전체를 한 번에 적용할 수도,
+바뀐 모듈만 골라 적용할 수도 있다(`-target` 또는 해당 디렉터리에서만 `apply`).
 
-환경 디렉터리마다 별도 state를 가지므로, 전체를 한 번에 적용할 수도 있고(`terraform apply`)
-바뀐 모듈만 골라 적용할 수도 있다(`-target` 또는 필요한 환경 디렉터리에서만 apply).
+## 기술 스택
 
-## 사용법 (예: environments/local/frontend)
+인프라 자체는 Terraform IaC이고, 그 위에서 도는 서비스는 폴리글랏 구성이다. 서비스별
+언어/프레임워크 전체 매핑은 [`docs/tech-stack.md`](docs/tech-stack.md) 참고.
 
-```
-cd environments/local/frontend
-cp terraform.tfvars.example terraform.tfvars   # 실제 값으로 채우기 (hosted_zone_id는 bootstrap output)
-terraform init
-terraform plan
-```
+| 레이어 | 기술 |
+| --- | --- |
+| 프로비저닝 | Terraform ≥ 1.10 (S3 `use_lockfile` — DynamoDB 락 테이블 없이 네이티브 락) |
+| 앱 배포 | Helm 차트 → ArgoCD (GitOps), 서비스 CI가 `values-dev.yaml`에 이미지 태그 직접 커밋 |
+| CI/CD (서비스 저장소) | GitHub Actions → OIDC(임시 자격증명) → ECR push |
+| 컨테이너 오케스트레이션 | Amazon EKS (관리형 노드그룹 + Karpenter) |
+| LLM 런타임 | Ollama(`gemma3:4b`) — GPU 노드그룹 대신 독립 EC2(`g4dn.xlarge`) |
+| 데이터베이스 | RDS PostgreSQL 16(Multi-AZ), ElastiCache Valkey(AUTH+TLS) |
+| 인증 | Amazon Cognito Hosted UI (`EMAIL_OTP`, OAuth2 code+PKCE) |
+| 프론트엔드 호스팅 | S3 + CloudFront + ACM + Route53 |
+| 시크릿 관리 | Secrets Manager + External Secrets Operator (컨트롤러엔 AWS 권한 없음, 앱 IRSA로 대리) |
+| 관측성 | CloudWatch 알람 7종 + SNS 이메일 통보 |
 
-`environments/local/network`는 변수 없이 바로 쓸 수 있다 (기본값이 이미 local 값):
+이 저장소 자체에는 CI/CD 워크플로 파일이 없다(서비스 저장소가 각자 소유) — 빌드 상태
+뱃지는 표시하지 않는다.
 
-```
+## 환경 현황
+
+`docs/aws-current-status.md`(2026-08-24 기준)와 `docs/operations-log.md`가 최신 상태의
+출처다. 아래는 요약:
+
+| 환경 | 상태 | 비고 |
+| --- | --- | --- |
+| `bootstrap` | ✅ 적용됨 | state 버킷, Route53 zone, CloudTrail, ECR ×3, backend-cicd Role ×3 |
+| `local` | 대부분 destroy됨 | `eks`만 모듈 검증용으로 apply→destroy 반복 재사용 |
+| `dev` | ✅ 상시 운영 중 (2026-08-18~) | `dev.sbsh.cloud` / `api.dev.sbsh.cloud` HTTPS로 서비스 중 |
+| `prod` | 미구축 | 착수 시 `dev`와 동일 모듈 세트 복제 예정 |
+
+`dev`는 비용 관리를 위해 **EKS 노드그룹/RDS/Ollama EC2만** 매일 09~21시(KST) 스케줄로
+켜고 끈다(컨트롤플레인·NAT·Valkey·ALB는 상시 유지) — 자세한 스케줄 변경 이력은
+[`docs/operations-log.md` §12-3](docs/operations-log.md#12-3-0921시-스케줄을-평일에서-매일로-확대-2026-08-21),
+스케줄 밖에서 수동으로 켜고 끄는 절차는
+[§12-2](docs/operations-log.md#12-2-스케줄-밖0921시-외-야간에-수동으로-켜고-끄는-절차-2026-08-21-12-3으로-주말-포함-이후-갱신) 참고.
+**수동으로 켰다면 작업이 끝난 뒤 반드시 수동으로 꺼야 한다.**
+
+## 시작하기
+
+`slash-local` / `slash-dev` / `slash-prod` 세 프로필을 미리 나눠뒀다(`~/.aws/config`).
+지금은 셋 다 같은 IAM 사용자 자격증명을 가리키지만, 이름을 분리해뒀기 때문에 나중에
+단계별로 다른 계정/사용자를 쓰기로 하면 프로필 값만 바꾸면 된다. 아래 명령어는
+`--profile slash-local` 또는 `AWS_PROFILE=slash-local`로 실행한다고 가정한다.
+
+```bash
 cd environments/local/network
 terraform init
 terraform plan   # 유효한 AWS 자격증명 필요 (aws sts get-caller-identity로 먼저 확인)
 ```
 
-자격증명 없이도 `terraform validate`까지는 로컬에서 확인 가능하다 — `plan`부터는 AWS API 호출이 필요하다.
+`environments/local/network`는 변수 없이 바로 쓸 수 있다(기본값이 이미 local 값). 다른
+모듈은 값을 채워야 한다:
 
-## 다음 단계 (아직 미구현)
+```bash
+cd environments/local/frontend
+cp terraform.tfvars.example terraform.tfvars   # hosted_zone_id는 bootstrap output
+terraform init
+terraform plan
+```
 
-`docs/aws-architecture.md`에 설계는 정리되어 있지만 아직 모듈이 없거나 완전히 안 끝난 부분:
-
-- GPU 노드그룹(`slash-llm`용, §5) — 범용 노드그룹은 `eks` 모듈로 구현 완료, GPU는 인스턴스 타입/개수 미정 ([이슈 #13](https://github.com/LikeLionTeam4/slash-infra/issues/13))
-- Karpenter 실제 설치(Helm, NodePool/EC2NodeClass) — IRSA Role은 `eks` 모듈에 준비돼 있지만 아직 한 번도 설치해본 적 없음(컨트롤러 자체는 K8s 내부 리소스라 GitOps로 별도 설치)
-- ArgoCD 설치 + `helm/`을 Application으로 등록하는 GitOps 연결 ([이슈 #10](https://github.com/LikeLionTeam4/slash-infra/issues/10)) — `helm/`은 준비됐지만 아직 수동 `helm install`로만 검증
-- API용 ALB Ingress에 실제 도메인(`api.dev.sbsh.cloud`) + ACM 연결(§8) — ALB Controller 자체는 IRSA Role apply + Helm 설치 + mock 이미지로 실제 ALB 응답까지 검증 완료(2026-08-11), 도메인 연결은 dev 환경 자체가 미구축이라 아직
-- ALB 5xx/GPU 사용률 알람(§10) — 위 둘이 상시로 떠 있게 되면 `observability` 모듈에 추가
-
-`environments/local/{eks,database,observability}`는 코드 작성 + `plan` 검증까지 끝났고, `eks`는
-ECR만 상시 적용 중(클러스터/ALB Controller/Helm chart는 apply→검증→destroy 완료, 재현 가능) —
-**EKS 컨트롤플레인이 월 ~$75로 지금까지 중 가장 비싸서 상시로 켜두지 않고 그때그때 검증 후
-정리하는 방식으로 진행 중**([docs/operations-log.md](docs/operations-log.md) §1 마스터 표 참고).
-`helm/README.md`에 사용법이 정리되어 있다.
+자격증명 없이도 `terraform validate`까지는 로컬에서 확인 가능하다 — `plan`부터
+AWS API 호출이 필요하다.
 
 ## State 백엔드 + DNS 부트스트랩 (최초 1회)
 
 다른 모든 환경이 remote state로 쓸 S3 버킷과, local/dev/prod가 공유하는 Route53 hosted
 zone(`sbsh.cloud`)을 만든다. 이 버킷이 없는 상태에서는 각 환경이 local backend로 동작한다.
 
-```
+```bash
 cd environments/bootstrap
 terraform init
 terraform apply
 ```
 
-`apply` 후 출력되는 `bucket_name`을 다른 환경의 `backend "s3"` 블록에 아래처럼 연결한다
+`apply` 후 출력되는 `bucket_name`을 다른 환경의 `backend "s3"` 블록에 연결한다
 (DynamoDB 없이 S3 자체 락 기능만 사용, Terraform 1.10+ 필요):
 
 ```hcl
@@ -93,22 +163,17 @@ terraform {
 }
 ```
 
-`route53_zone_id` 출력값은 `frontend-hosting` 모듈을 쓰는 각 환경의 `hosted_zone_id` 변수로
-넘긴다. `route53_name_servers` 출력값(4개)은 가비아 도메인 관리 화면의 네임서버 설정에
-그대로 등록해서 `sbsh.cloud`를 Route53으로 위임한다.
-
-자세한 배경은 [docs/aws-architecture.md](docs/aws-architecture.md) §2, §3 참고.
-
-## AWS CLI 프로필
-
-`slash-local` / `slash-dev` / `slash-prod` 세 프로필을 미리 나눠뒀다(`~/.aws/config`).
-지금은 셋 다 같은 IAM 사용자 자격증명을 가리키지만, 이름을 분리해뒀기 때문에 나중에 단계별로
-다른 계정/사용자를 쓰기로 하면 프로필 값만 바꾸면 된다. 사용 시 `--profile slash-local` 또는
-`AWS_PROFILE=slash-local`로 지정.
+`route53_zone_id` 출력값은 `frontend-hosting` 모듈을 쓰는 환경의 `hosted_zone_id`
+변수로 넘긴다. `route53_name_servers` 출력값(4개)은 가비아 도메인 관리 화면의
+네임서버 설정에 등록해 `sbsh.cloud`를 Route53으로 위임한다. 배경은
+[`docs/aws-architecture.md`](docs/aws-architecture.md) §2, §3 참고.
 
 ## dev 클러스터 상태 확인 (Headlamp)
 
-리소스 하나하나 AWS 콘솔에서 찾아보지 않고 EKS 파드 상태를 한눈에 보려면 [Headlamp](https://headlamp.dev) 데스크톱 앱을 쓴다(검토 배경: 이슈 [#47](https://github.com/LikeLionTeam4/slash-infra/issues/47)/[#49](https://github.com/LikeLionTeam4/slash-infra/issues/49)). 클러스터에 아무것도 추가로 설치하지 않는 방식이라 비용은 $0.
+리소스 하나하나 AWS 콘솔에서 찾아보지 않고 EKS 파드 상태를 한눈에 보려면
+[Headlamp](https://headlamp.dev) 데스크톱 앱을 쓴다(검토 배경: 이슈
+[#47](https://github.com/LikeLionTeam4/slash-infra/issues/47)/[#49](https://github.com/LikeLionTeam4/slash-infra/issues/49)).
+클러스터에 아무것도 추가로 설치하지 않는 방식이라 비용은 $0.
 
 ### 사전 준비 — kubectl 접근 권한 (이슈 [#63](https://github.com/LikeLionTeam4/slash-infra/issues/63))
 
@@ -125,23 +190,18 @@ brew install --cask headlamp
 aws eks update-kubeconfig --name slash-eks-dev --region ap-northeast-2 --profile slash-dev
 ```
 
-앱을 열고 `slash-eks-dev`(계정 `061039804626`)를 선택하면 연결된다. 같은 이름인데 계정이
-`727646470302`인 항목이 보이면 무시하거나 `kubectl config delete-context <이름>`으로 지운다 —
-부트캠프 계정 재발급([이슈 #21](https://github.com/LikeLionTeam4/slash-infra/issues/21)) 이전
-kubeconfig 흔적이다.
-
-### 보는 법
-
-**워크로드 → 디플로이먼트**에서 파드 수(`N/M`)만 확인한다 — N=M이면 정상.
+앱을 열고 `slash-eks-dev`(계정 `061039804626`)를 선택하면 연결된다. **워크로드 →
+디플로이먼트**에서 파드 수(`N/M`)만 확인한다 — N=M이면 정상:
 
 | 서비스 | 정상 값 |
 | --- | --- |
 | slash-api | 2/2 |
 | slash-nlu | 2/2 |
-| slash-llm | 1/1 |
+| slash-llm | 1/1 (Ollama EC2가 꺼져 있으면 `/ready`가 503을 반환해 Progressing 상태로 보일 수 있음 — 버그 아님, [`docs/aws-current-status.md`](docs/aws-current-status.md) 참고) |
 
-숫자가 다르면: 해당 디플로이먼트 클릭 → 파드 목록에서 `Running`이 아닌 파드 클릭 → 로그/Events로
-원인 확인. **ReplicaSet 목록은 안 봐도 된다** — 배포할 때마다 쌓이는 이력이라 대부분 `0/0`이 정상이다.
+숫자가 다르면: 해당 디플로이먼트 클릭 → `Running`이 아닌 파드 클릭 → 로그/Events로
+원인 확인. ReplicaSet 목록은 안 봐도 된다 — 배포마다 쌓이는 이력이라 대부분 `0/0`이
+정상이다.
 
 ### 팀원 추가하기
 
@@ -168,50 +228,43 @@ terraform apply
 
 ## 다른 AWS 계정에서 시작하기 (팀원용)
 
-부트캠프 계정은 사람마다 따로 발급되므로, 팀원이 이 저장소를 clone해서 apply하면 사실상
-**완전히 새 AWS 계정**에서 시작하는 것과 같다. 지금까지 만들어둔 리소스와는 전혀 공유되지
-않고(계정이 다르면 state를 나눠 쓸 방법이 없다), 그래도 충돌 없이 잘 되는 부분과 안 되는
-부분이 갈린다.
+부트캠프 계정은 사람마다 따로 발급되므로, 팀원이 이 저장소를 clone해서 apply하면
+사실상 **완전히 새 AWS 계정**에서 시작하는 것과 같다 — 계정이 다르면 state를 나눠
+쓸 방법이 없어 지금까지 만든 리소스와 전혀 공유되지 않는다.
 
-### 사전 준비물
+**사전 준비물**: Terraform 1.10 이상(`use_lockfile` 기능), AWS CLI v2. `local/frontend`까지
+테스트하려면 [slash-web](https://github.com/LikeLionTeam4/slash-web) 저장소도 별도 clone.
 
-- Terraform 1.10 이상 (`use_lockfile` 기능 때문에 `bootstrap`이 요구), AWS CLI v2
-- `local/frontend`까지 테스트하려면 [slash-web](https://github.com/LikeLionTeam4/slash-web) 저장소도 별도 clone (Node/npm)
+**순서**:
 
-### 순서
+1. 본인 부트캠프 계정 IAM 액세스 키로 `aws configure` (프로필명은 `slash-local`로
+   맞추면 이 문서 명령어를 그대로 복붙 가능).
+2. `environments/bootstrap` apply — 본인 계정에 본인만의 state 버킷과 Route53 zone 생성.
+3. `environments/local/network` apply — 변수 없이 바로 됨.
+4. `environments/local/frontend`는 주의가 필요하다: `bucket_name`(전역 유일)이 다른
+   계정에서 이미 선점됐을 수 있고, 무엇보다 본인 계정에 새로 만든 `sbsh.cloud` zone은
+   가비아가 위임한 진짜 zone이 아니라서 ACM 인증서 DNS 검증이 영원히 끝나지 않는다 —
+   본인이 위임 가능한 다른 도메인을 쓰거나, 이 모듈은 건너뛰고 `network`까지만 연습할 것.
+5. destroy는 [`docs/operations-log.md` §5](docs/operations-log.md)의 순서(frontend →
+   network → bootstrap)를 본인 계정 안에서 그대로 따르면 된다.
 
-1. **본인 IAM 액세스 키 준비** — 본인 부트캠프 계정에서 발급받은 키로 `aws configure`
-   (또는 `aws configure set aws_access_key_id/aws_secret_access_key/region`). 프로필 이름은
-   `slash-local`로 맞춰두면 이 문서의 명령어를 그대로 복붙할 수 있다 (`AWS_PROFILE=slash-local`).
-2. **`environments/bootstrap` apply** — 본인 계정에 본인만의 state 버킷(`slash-tfstate-<본인 계정ID>`)과
-   Route53 zone이 생긴다. 버킷 이름에 계정ID가 붙어서 다른 사람 것과 안 겹친다.
-3. **`environments/local/network` apply** — 그대로 문제없이 된다. VPC/서브넷/보안그룹 실습은 이것만으로 충분.
-4. **`environments/local/frontend`는 주의가 필요하다**:
-   - `bucket_name`은 **전역에서 유일**해야 하는데 `terraform.tfvars.example`의 `slash-web-local`은
-     이미 다른 계정에서 선점돼 있을 수 있다 — 본인 계정ID나 이름을 붙여서 겹치지 않게 바꿀 것.
-   - **더 중요한 문제**: 이 모듈은 `hosted_zone_id`로 넘긴 Route53 zone이 실제로 인터넷에서
-     도달 가능해야 ACM 인증서의 DNS 검증(`aws_acm_certificate_validation`)이 끝난다. 본인 계정에
-     새로 만든 `sbsh.cloud` zone은 가비아가 위임한 진짜 zone이 아니라서(가비아는 원본 계정의
-     zone 하나만 가리킨다) **영원히 검증되지 않고 apply가 멈춘다.**
-   - 그래서 실제로 테스트하려면: (a) 본인이 소유하고 위임 가능한 다른 도메인으로 `domain_name`을
-     바꾸거나, (b) 이 모듈은 건너뛰고 `network`까지만 연습하는 것을 권장.
-5. **destroy는 [docs/operations-log.md](docs/operations-log.md) §5의 순서**(frontend → network → bootstrap)를
-   본인 계정 안에서 그대로 따르면 된다 — 계정이 다르니 다른 사람 리소스에 영향 없음.
+## 문서 맵
 
-## 아키텍처
-
-전체 AWS 인프라 설계(네트워크, EKS, RDS, CI/CD 등)는 [docs/aws-architecture.md](docs/aws-architecture.md) 참고.
-
-**Terraform apply/destroy 순서와 구현된 것/안 된 것 전체 표**는 [docs/operations-log.md §1](docs/operations-log.md#1-전체-순서--구현-상태-한눈에-보기) 참고 — 계속 갱신되는 운영 기록.
-
-**장애 대응 테스트(게임 데이) 카탈로그**는 [docs/resilience-testing.md](docs/resilience-testing.md) 참고 — 실행 결과는 `operations-log.md`에 기록.
-
-**EKS 노드그룹/RDS/Ollama는 매일(주말 포함) 09~21시(KST)만 자동으로 켜져 있습니다**([docs/operations-log.md §12-3](docs/operations-log.md#12-3-0921시-스케줄을-평일에서-매일로-확대-2026-08-21)). 그 시간 외에 작업하고 싶다면 수동 시작/종료 절차를 [docs/operations-log.md §12-2](docs/operations-log.md#12-2-스케줄-밖0921시-외-야간에-수동으로-켜고-끄는-절차-2026-08-21-12-3으로-주말-포함-이후-갱신) 참고 — 수동으로 켰다면 작업 끝나고 반드시 수동으로 꺼야 한다.
+| 문서 | 내용 |
+| --- | --- |
+| [`docs/aws-architecture.md`](docs/aws-architecture.md) | 전체 아키텍처 설계 근거 — 네트워크/EKS/RDS/CI-CD/Cognito 등 결정사항과 이유 |
+| [`docs/aws-current-status.md`](docs/aws-current-status.md) | 지금 실제로 떠 있는 리소스 스냅샷 |
+| [`docs/operations-log.md`](docs/operations-log.md) | Apply/Destroy 실행 기록, 순서, 트러블슈팅 — 계속 갱신되는 운영 일지 |
+| [`docs/resource-ownership.md`](docs/resource-ownership.md) | 어느 리소스를 어느 `environments/*`가 소유하는지 |
+| [`docs/security-architecture.md`](docs/security-architecture.md) | IAM/OIDC/보안그룹/시크릿 흐름 — "누가 무엇에 접근 가능한가" |
+| [`docs/user-flow.md`](docs/user-flow.md) | 로그인·자유입력 요청·에이전트 페어링이 실제로 타는 경로 |
+| [`docs/tech-stack.md`](docs/tech-stack.md) | 서비스별 언어/프레임워크 매핑 |
+| [`docs/resilience-testing.md`](docs/resilience-testing.md) | 장애 대응 테스트(게임 데이) 카탈로그 |
 
 ## 관련 저장소
 
 | 저장소 | 역할 |
-|---|---|
+| --- | --- |
 | [slash-web](https://github.com/LikeLionTeam4/slash-web) | 웹 클라이언트 — React·Vite UI, S3/CloudFront 배포 |
 | [slash-api](https://github.com/LikeLionTeam4/slash-api) | 코어 API — 인증, 작업 관리, 실행 위치 결정, DB 연동 |
 | [slash-nlu](https://github.com/LikeLionTeam4/slash-nlu) | 자연어 분석 — slash 명령 파싱, 규칙·Kiwi 의도 분류, 인자 추출 |
