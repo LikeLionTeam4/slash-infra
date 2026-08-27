@@ -14,7 +14,7 @@ Slash 프로젝트 전체(웹 프론트엔드 제외 백엔드 서비스군)를 
 - 아래 모든 리소스는 환경별로 복제 가능한 모듈 구조를 전제로 설계하고, 환경을 늘릴 때 값(인스턴스 크기, Multi-AZ 여부 등)만 다르게 넣는 방식을 목표로 한다.
 - 예산은 "적당히 여유 있음" — 비용 최소화보다 가용성·확장성을 우선한다. 다만 GPU 노드처럼 비용이 크게 튀는 항목은 §12에 별도로 짚는다.
 
-### 1-1. 전체 구성도 (dev 기준, 2026-08-19)
+### 1-1. 전체 구성도 (dev 기준, 2026-08-21 갱신)
 
 ```mermaid
 flowchart TB
@@ -45,17 +45,17 @@ flowchart TB
             NAT["NAT Gateway ×2"]
         end
         subgraph APP["private-app 서브넷"]
-            subgraph EKS["EKS 범용 노드그룹\n⏰ 평일 09~21시만 desired=3 (그 외 0)"]
+            subgraph EKS["EKS 범용 노드그룹\n⏰ 매일 09~21시만 desired=3 (그 외 0)"]
                 ALBC["AWS LB Controller"]
                 API["slash-api"]
                 NLU["slash-nlu"]
                 LLM["slash-llm"]
                 ARGOCD["ArgoCD"]
             end
-            OLLAMA["Ollama EC2 (g4dn.xlarge)\n10.8.11.172:11434\n⏰ 평일 09~21시만 start"]
+            OLLAMA["Ollama EC2 (g4dn.xlarge)\n10.8.11.172:11434\n⏰ 매일 09~21시만 start"]
         end
         subgraph DBTIER["private-db 서브넷 (인터넷 경로 없음)"]
-            RDS[("RDS PostgreSQL\nMulti-AZ · slash_dev/slash_demo\n⏰ 평일 09~21시만 start")]
+            RDS[("RDS PostgreSQL\nMulti-AZ · slash_dev/slash_demo\n⏰ 매일 09~21시만 start")]
             VALKEY[("Valkey (ElastiCache)\nAUTH + TLS, 상시 가동")]
         end
         S3EP["S3 Gateway Endpoint"]
@@ -63,8 +63,9 @@ flowchart TB
 
     subgraph OBS["옵저버빌리티"]
         CW["CloudWatch 알람 7개\n(RDS CPU/스토리지,\nALB 5xx/레이턴시,\nValkey CPU/메모리/eviction)"]
+        EB["EventBridge\n삭제 감지\n(NAT/ALB 계정전체,\nEKS/Cognito/Valkey는 slash만)"]
         DASH["CloudWatch 대시보드\nslash-dashboard-dev"]
-        SNS["SNS → 이메일"]
+        SNS["SNS → 이메일 (팀원 3명)"]
     end
 
     USER -->|HTTPS| CF --> S3W
@@ -83,15 +84,20 @@ flowchart TB
     RDS -.-> CW
     ALB -.-> CW
     VALKEY -.-> CW
+    CT -.->|"관리 이벤트(Delete*)"| EB
     CW --> SNS
+    EB --> SNS
     CW -.-> DASH
     R53 --> CF
     R53 --> ALB
 ```
 
 - 컨트롤플레인·NAT·Valkey·ALB는 stop 개념이 없어 상시 유지, EKS 노드그룹/RDS/Ollama EC2만
-  평일 09~21시(KST) 스케줄로 내렸다 올린다(2026-08-19, `modules/eks/schedule.tf`,
+  09~21시(KST) 스케줄로 내렸다 올린다(2026-08-19 도입, `modules/eks/schedule.tf`,
   `modules/database/schedule.tf`, `modules/llm-runtime/schedule.tf`) — 다이어그램의 ⏰ 표시.
+  **가동 요일은 평일(MON-FRI)에서 매일로 확대됨(2026-08-21, `docs/operations-log.md` §12-3)** —
+  모듈 기본값(`variables.tf`)은 "평일"을 유지하되, dev 환경 호출부(`environments/dev/*/main.tf`)에서
+  `schedule_start_cron`/`schedule_stop_cron`을 `cron(0 9/21 ? * * *)`(매일)로 오버라이드했다.
 - 실제 리소스 배치·트래픽 왕복이 어떻게 요청 단위로 흐르는지는 `docs/user-flow.md` 참고.
 
 ## 2. 리전 & 태깅 전략
@@ -330,20 +336,26 @@ sequenceDiagram
 - prod는 `main` push/merge + `production` Environment 필수 리뷰어 승인 게이트가 붙는다(§9-3) —
   위 다이어그램은 dev(승인 없음) 기준.
 
-## 10. 옵저버빌리티 (CloudWatch / CloudTrail)
+## 10. 옵저버빌리티 (CloudWatch / EventBridge / CloudTrail)
 
-Terraform 밖에서 별도로 작업할 필요는 없다 — AWS provider가 CloudWatch/CloudTrail 리소스를 그대로 지원하므로 다른 모듈과 동일하게 관리한다. **CloudTrail은 `environments/bootstrap`, CloudWatch 알람은 `modules/observability`(환경별)로 구현 완료** — 둘의 위치가 다른 이유는 아래 참고.
+Terraform 밖에서 별도로 작업할 필요는 없다 — AWS provider가 CloudWatch/EventBridge/CloudTrail 리소스를 그대로 지원하므로 다른 모듈과 동일하게 관리한다. **CloudTrail은 `environments/bootstrap`, CloudWatch 알람·EventBridge 삭제 감지 규칙은 `modules/observability`(환경별)로 구현 완료** — 위치가 다른 이유는 아래 참고.
 
 - **CloudWatch** (`modules/observability`)
-  - 알람 7개(2026-08-19, 이슈 #43) + 알림용 SNS 토픽. `alarm_email` 변수로 이메일 구독 선택 가능.
+  - 알람 7개(2026-08-19, 이슈 #43) + 알림용 SNS 토픽(`slash-alarms-dev`). `alarm_emails`(list, 2026-08-21부터 다중 구독 지원 — 이전 `alarm_email` 단일 변수에서 변경) 변수로 이메일 구독. **2026-08-21 이전까지 구독자 0명으로 방치돼 있었다가**(§20 사고 조사 중 발견) 팀원 이메일 3개 등록 완료 — 각자 메일함에서 Confirm 링크를 눌러야 실제 수신 시작.
     - RDS: CPU 사용률(80% 초과), 여유 스토리지(2GB 미만)
     - ALB: 5xx 응답 수(5분당 10건 초과), 타깃 응답시간(평균 2초 초과) — ALB Ingress가 뜬(§8, §9-3) 뒤 추가
     - Valkey: `EngineCPUUtilization`(80% 초과), `DatabaseMemoryUsagePercentage`(80% 초과), Eviction 발생(1건 이상)
     - GPU 노드 사용률 알람은 여전히 없음 — GPU 노드그룹 자체를 안 만들기로 확정해서(§5-1) 대상이 없음
   - **CloudWatch 대시보드**(`slash-dashboard-dev`, 2026-08-19, 이슈 #44) — 위 7개 알람을 `annotations.alarms`로 참조하는 위젯으로 묶어 한 화면에서 상태를 볼 수 있게 함(리소스 하나하나 콘솔/CLI로 따로 확인할 필요 없이 팀원이 대시보드 링크 하나만 열면 됨, `modules/observability`의 `dashboard_url` 출력값). EKS 지표는 없음 — Container Insights를 켜지 않으면 EKS는 CloudWatch에 기본 지표를 내보내지 않아서(RDS/ALB/ElastiCache와 달리 자동 발행이 아님), Container Insights 도입 여부가 결정되면 추가.
   - **EKS 컨트롤플레인 로그(audit/authenticator)는 2026-08-25(이슈 #44/#68)부터 CloudWatch로 나간다** — "누가 클러스터 API에 접근했는지" 감사 목적. api/controllerManager/scheduler 로그는 지금 필요성이 낮아 비용상 보류. 로그 그룹(`modules/eks/logging.tf`)을 EKS보다 먼저 명시적으로 생성해서 EKS 자동 생성 시 보존기간이 무기한으로 잡히는 함정을 피했다 — `log_retention_days` 변수로 보존기간 조정 가능(기본 30일). 애플리케이션 로그 그룹(`aws_cloudwatch_log_group`, 예: `/eks/slash-api-dev`)은 아직 없음 — 파드 로그 수집기(Fluent Bit/Container Insights) 도입 여부와 함께 이슈 #44에서 계속 검토 중.
+- **EventBridge — 상시 유지 리소스 삭제 감지**(`modules/observability/critical_deletion_alarms.tf`, 신규 2026-08-21, 이슈 #56 후속)
+  - **계기**: 공유 부트캠프 계정에서 다른 팀(`b-student-02`)이 자기 팀 NAT를 반복 생성/삭제하는 apply/destroy 사이클을 돌리다 slash 소유 NAT Gateway 2개까지 실수로 `DeleteNatGateway`로 같이 지운 사고(2026-08-20, `docs/operations-log.md` §19) — private-app 서브넷 아웃바운드가 반나절 끊기며 slash-api의 Cognito JWKS fetch 실패(401 로그인 루프)까지 이어졌다. CloudWatch 알람은 메트릭 기반이라 "리소스가 통째로 사라짐" 자체는 감지하지 못해, 이미 켜져 있는 CloudTrail(`slash-trail`) 관리 이벤트를 EventBridge 기본 이벤트버스가 실시간 수신하는 경로로 별도 감지 체계를 추가했다.
+  - EventBridge 규칙 6개 + SNS(같은 `slash-alarms-dev` 토픽) 타깃, `input_transformer`로 사람이 읽을 수 있는 문장으로 가공:
+    - **계정 전체 스코프**(리소스 ID가 재생성마다 바뀌어 사전 필터링 불가): `DeleteNatGateway`(EC2), `DeleteLoadBalancer`(ELBv2) — 부트캠프 공유 계정이라 다른 팀이 자기 것을 지워도 같이 울리는 오탐을 감수하더라도, §19처럼 "다른 팀이 우리 걸 지웠는데 몰랐다"를 놓치는 비용이 훨씬 크다고 판단.
+    - **slash 리소스만 필터링**(이름/ID 고정이라 `requestParameters`로 스코핑): `DeleteCluster`/`DeleteNodegroup`(EKS), `DeleteUserPool`(Cognito), `DeleteReplicationGroup`(Valkey) — 각각 `eks_cluster_name`/`cognito_user_pool_id`/`valkey_replication_group_id` 변수가 `null`이면 규칙 자체를 안 만듦.
+  - **검토 후 보류: `lifecycle { prevent_destroy = true }`.** (1) §19 사고는 애초에 slash Terraform이 아니라 다른 팀의 AWS API 직접 호출이라 이걸로는 못 막았을 것이고, (2) `modules/network`가 dev(상시 유지)와 local(매 라운드 destroy되는 테스트베드)에서 같이 쓰이는데 `prevent_destroy`는 변수/표현식을 못 받고 리터럴만 허용해 environment별 조건부 적용이 안 됨(`terraform validate`로 확인) — 리소스 이중 정의 우회는 route table 참조가 복잡해져 보류. 이번 위협엔 사전 차단보다 즉시 감지가 맞는 도구라고 판단.
 - **CloudTrail** (`environments/bootstrap`)
-  - 계정 전체 API 호출 감사용으로 트레일 1개(`aws_cloudtrail`)를 만들고, 로그는 전용 S3 버킷(버저닝 + 수명주기 정책, 잠정 90일 후 만료)에 적재.
+  - 계정 전체 API 호출 감사용으로 트레일 1개(`aws_cloudtrail`)를 만들고, 로그는 전용 S3 버킷(버저닝 + 수명주기 정책, 잠정 90일 후 만료)에 적재. 위 EventBridge 삭제 감지 규칙이 구독하는 관리 이벤트의 출처이기도 하다.
   - **왜 환경별 모듈이 아니라 bootstrap에 두나**: CloudTrail은 계정 전체를 감사하는 거라 local/dev/prod가 각자 만들면 같은 계정 안에 트레일이 중복된다 — state 버킷·Route53 zone처럼 "계정당 한 번만" 만드는 자원이라 bootstrap이 자연스러운 자리. 반대로 CloudWatch 알람은 특정 환경의 RDS/EKS를 가리켜야 해서 환경별로 필요.
   - 단일 리전 트레일로 충분, 계정이 여러 개로 늘어나면 organization trail 전환을 고려.
 
@@ -368,7 +380,7 @@ local/dev/prod 3단계로 나눈다. **결정(2026-08-12): 팀 전체가 계정 
 예산에 영향이 큰 순서대로:
 
 1. **EKS 컨트롤플레인 고정비** — 클러스터당 시간당 과금, 환경을 늘릴수록 누적.
-2. **LLM 런타임 EC2(`g4dn.xlarge`, §5-1)** — GPU 인스턴스라 시간당 비용이 큼(On-demand ~$0.65/h, ap-northeast-2 기준). 스케줄 도입 초기엔 Spot(~$0.22~0.33/h)도 시도했지만 하루 안에 두 AZ 모두에서 용량 부족을 겪어 On-Demand로 확정했다(`docs/operations-log.md` §11-5) — 상시 가동 대신 평일 09~21시 stop/start 스케줄로 운용한다.
+2. **LLM 런타임 EC2(`g4dn.xlarge`, §5-1)** — GPU 인스턴스라 시간당 비용이 큼(On-demand ~$0.65/h, ap-northeast-2 기준). 스케줄 도입 초기엔 Spot(~$0.22~0.33/h)도 시도했지만 하루 안에 두 AZ 모두에서 용량 부족을 겪어 On-Demand로 확정했다(`docs/operations-log.md` §11-5) — 상시 가동 대신 09~21시 stop/start 스케줄로 운용한다. **가동 요일은 평일→매일로 확대**돼 주당 가동시간이 60h→84h로 늘었고, 이에 따라 EKS 노드그룹/RDS/Ollama EC2 세 스케줄 대상 합산 비용도 월 ~$434 → ~$528로 재산정됐다(`docs/operations-log.md` §12-3).
 3. **NAT Gateway** — dev/prod는 AZ당 1개(§4)라 시간당 과금 + 데이터 처리 비용이 2배로 발생. local은 1개로 아낀다. S3 접근은 Gateway Endpoint(§4-1)로 우회해 데이터 처리 비용 일부는 줄인다.
 4. **RDS Multi-AZ** — dev/prod는 활성화(§7-1)라 인스턴스 비용이 2배로 발생 — 기존 "prod만 Multi-AZ" 가정에서 변경됨.
 5. **Valkey(ElastiCache)** — RDS와 별개로 상시 과금되는 노드. 최소 타입으로 시작해도 24시간 켜져 있는 비용이 누적됨.
