@@ -16,7 +16,7 @@ helm install karpenter oci://public.ecr.aws/karpenter/karpenter \
   --namespace kube-system \
   --set settings.clusterName=slash-eks-dev \
   --set settings.interruptionQueue="" \
-  --set serviceAccount.annotations."eks\.amazonaws\.com/role-arn"=arn:aws:iam::727646470302:role/slash-karpenter-controller-dev \
+  --set serviceAccount.annotations."eks\.amazonaws\.com/role-arn"=arn:aws:iam::061039804626:role/slash-karpenter-controller-dev \
   --wait --timeout 5m
 
 kubectl apply -f karpenter/dev/nodepool.yaml

@@ -38,3 +38,12 @@ output "slash_api_role_arn" {
   description = "helm/slash-api/values-dev.yaml의 serviceAccount.roleArn에 채울 값"
   value       = module.eks.slash_api_role_arn
 }
+
+output "fluent_bit_role_arn" {
+  description = "Fluent Bit Helm 설치 시 ServiceAccount 애노테이션에 넣을 Role ARN"
+  value       = module.eks.fluent_bit_role_arn
+}
+
+output "application_log_group_name" {
+  value = module.eks.application_log_group_name
+}

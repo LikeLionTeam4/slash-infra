@@ -100,3 +100,9 @@ variable "aws_region" {
   type        = string
   default     = "ap-northeast-2"
 }
+
+variable "application_log_group_name" {
+  description = "Fluent Bit가 쓰는 앱 로그 그룹 이름(modules/eks의 application_log_group_name output) — 대시보드에 수집량(IncomingBytes) 위젯을 추가할 대상. null이면 위젯을 만들지 않는다(Fluent Bit 미설치 환경용)"
+  type        = string
+  default     = null
+}
