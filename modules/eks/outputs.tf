@@ -43,3 +43,13 @@ output "slash_api_role_arn" {
   description = "helm/slash-api values-<env>.yaml의 serviceAccount.roleArn에 채울 값 — slash_api_secret_arns가 비어있으면 빈 문자열"
   value       = length(var.slash_api_secret_arns) > 0 ? aws_iam_role.slash_api[0].arn : ""
 }
+
+output "fluent_bit_role_arn" {
+  description = "Fluent Bit Helm 설치 시 ServiceAccount 애노테이션에 넣을 Role ARN (slash-infra/logging/README.md)"
+  value       = aws_iam_role.fluent_bit.arn
+}
+
+output "application_log_group_name" {
+  description = "Fluent Bit CloudWatch 출력 설정의 log_group_name에 넣을 값"
+  value       = aws_cloudwatch_log_group.application.name
+}

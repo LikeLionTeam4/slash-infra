@@ -89,6 +89,7 @@ module "observability" {
   eks_cluster_name            = data.terraform_remote_state.eks.outputs.cluster_name
   cognito_user_pool_id        = data.terraform_remote_state.cognito.outputs.user_pool_id
   valkey_replication_group_id = data.terraform_remote_state.database.outputs.valkey_replication_group_id
+  application_log_group_name  = data.terraform_remote_state.eks.outputs.application_log_group_name
 
   # NAT Gateway 삭제 사고(2026-08-21, slash-infra#56) 계기로 팀원 알림 추가.
   alarm_emails = [

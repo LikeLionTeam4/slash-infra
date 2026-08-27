@@ -928,3 +928,82 @@ backend "s3" {
 dev에 적용 후 로그 그룹이 보존기간 30일로 생성된 것, 컨트롤플레인 로깅 상태 전부 실측 확인. `terraform plan` "No changes" 확인.
 
 **남은 일**: 파드/애플리케이션 로그 수집(Fluent Bit vs Container Insights)은 이슈 #44에 계속 남아있음 — `docs/aws-architecture.md` §10 참고.
+
+## 26. 파드 로그(Fluent Bit) CloudWatch 연동 (이슈 #44, 2026-08-27)
+
+이슈 #44의 남은 절반 — 파드 stdout/stderr 수집. `kubectl logs`가 살아있는 파드만 조회 가능해서
+파드가 재시작/스케일다운되면 그 시점 로그가 사라지는 문제를 해결. 지표(CPU/메모리,
+Container Insights vs Prometheus/Grafana)는 이슈 #47로 여전히 분리해서 미결정 상태로 남김 —
+이번 작업 범위 밖.
+
+- `modules/eks/fluent_bit_irsa.tf`(신규) — `slash_api_irsa.tf`/`karpenter.tf`와 같은 패턴의
+  IRSA Role. Trust는 `system:serviceaccount:amazon-cloudwatch:fluent-bit`, 정책은
+  `logs:CreateLogStream`/`PutLogEvents`/`DescribeLogGroups`/`DescribeLogStreams`만(로그
+  그룹은 Terraform이 이미 만들어두므로 `CreateLogGroup`/`PutRetentionPolicy`는 의도적으로 제외).
+- `modules/eks/logging.tf` — `aws_cloudwatch_log_group.application`(`/eks/slash-eks-dev/application`,
+  `retention_in_days = var.log_retention_days`) 추가. `eks_cluster` 로그 그룹과 같은 이유로
+  Fluent Bit보다 먼저 생성해 무기한 보존을 피함.
+- `logging/README.md`(신규) — `aws-for-fluent-bit`(공식 `eks-charts`) Helm 설치 문서.
+  **주의**: 차트 values.yaml에 CloudWatch 출력 블록이 두 개 있다 — `cloudWatch`(레거시
+  `cloudwatch` 플러그인, 기본 `enabled: false`)와 `cloudWatchLogs`(최신 `cloudwatch_logs`
+  플러그인, 기본 `enabled: true`). `cloudWatchLogs.*` 키를 써야 한다 — 처음엔 `cloudWatch.*`로
+  문서를 썼다가 `helm show values`로 실제 차트를 확인하면서 발견해 정정.
+
+**적용 중 발견한 별개 문제 — 이 머신에 `terraform.tfvars`가 없었다**: `environments/dev/eks`에
+로컬 `terraform.tfvars`(gitignore 대상, `team_member_arns`)가 없는 상태로 `terraform plan`을
+돌렸더니 Fluent Bit 리소스 3개 추가 외에 **팀원 4명분(`a-student-03`, `a-student-09`,
+`b-student-09`, `b-student-10`) 클러스터 접근 권한(`aws_eks_access_entry`/
+`aws_eks_access_policy_association`, 인당 2개 = 8개) 전체를 destroy**하려는 계획이 같이
+잡혔다 — `team_member_arns` 기본값이 빈 리스트라 tfvars 없이 plan을 돌리면 항상 이 위험이
+있다. `aws eks list-access-entries` + `list-associated-access-policies`로 실제
+`AmazonEKSClusterAdminPolicy`가 연결된 principal을 조회해 tfvars를 복원한 뒤 재plan으로
+"3 to add, 0 to destroy"만 남는 것 확인 후 apply. **교훈**: 이 저장소의 gitignore된 tfvars는
+git으로 백업되지 않으므로, 새 머신에서 `dev/eks`를 만질 땐 적용 전 반드시 `terraform plan`으로
+destroy 항목이 없는지 먼저 확인할 것 — `terraform.tfvars.example`만 보고 값을 비워두면 안 된다.
+
+**계정 번호 문서 오류도 같이 발견/정정**: `docs/aws-architecture.md`/`karpenter/README.md`에
+2026-08-13 계정 재발급(§3, `727646470302`→`061039804626`) 이전 계정 번호가 그대로 남아있던 걸
+발견 — 당시 마이그레이션이 `.tf`/`values.yaml` 등 실제 코드는 다 고쳤지만 이 두 문서는
+빠뜨렸던 것으로 보인다. 두 문서를 현재 계정 번호로 정정.
+
+적용 후 검증: `kubectl get pods -n amazon-cloudwatch`로 노드 수만큼(3개) DaemonSet Running
+확인, `aws logs describe-log-streams`/`get-log-events`로 slash-api/slash-nlu 로그가
+실시간으로 들어오는 것 확인. **핵심 검증**: slash-api 파드 하나를 `kubectl delete pod`로
+강제 재시작시킨 뒤, `kubectl logs`는 `NotFound`가 되지만 그 파드의 CloudWatch 로그 스트림은
+그대로 조회되는 것 확인(46개 이벤트) — 이번 작업이 해결하려던 문제 그대로 해소.
+
+**남은 일**: 1~2일 실사용 트래픽 기준으로 로그 그룹의 `IncomingBytes` 지표를 확인해 실제
+수집량을 산정하고 `log_retention_days`(현재 기본 30일) 최종값을 결정할 것 — 비용이 예상보다
+크면 7~14일로 낮추는 것도 검토.
+
+**대시보드 위젯 추가(같은 날)**: 위 "남은 일"의 실측을 CLI 없이 확인할 수 있도록
+`slash-dashboard-dev`(`modules/observability/dashboard.tf`)에 로그 그룹 `IncomingBytes`
+위젯 추가. 기존 위젯은 전부 `annotations.alarms`로 기존 알람을 참조하는 방식인데, 이 위젯은
+아직 임계값/알람이 없어 예외적으로 raw metric(`AWS/Logs` 네임스페이스, `LogGroupName`
+디멘션)을 직접 선언 — `modules/observability/variables.tf`에 `application_log_group_name`
+변수 추가, `environments/dev/observability/main.tf`에서 `eks` 모듈의
+`application_log_group_name` output을 전달. `terraform plan`에 무관한 drift(기존 코드에
+있었지만 한 번도 apply 안 된 `baegugureview@gmail.com` SNS 알람 구독)가 같이 잡혀서
+`-target=module.observability.aws_cloudwatch_dashboard.dev`로 대시보드 리소스만 적용,
+`aws cloudwatch get-dashboard`로 위젯 8개(기존 7개 + 신규 1개) 확인. SNS 구독 drift는
+이번 범위 밖이라 그대로 보류.
+
+**로그 기반 위젯 2개 추가(같은 날)**: 로그를 tail/Insights 쿼리로만 보면 이해하기 어렵다는
+피드백으로, Prometheus/Grafana 같은 별도 스택 없이 지금 있는 CloudWatch 대시보드에만 더
+얹었다. `modules/observability/log_metrics.tf`(신규) — 앱 로그 그룹에
+`aws_cloudwatch_log_metric_filter`로 `{ $.log = "*ERROR*" }` 패턴을 세는
+`Slash/ApplicationLogs.ApplicationErrorCount` 커스텀 메트릭 생성(단순 substring 매칭이라
+오탐 가능성 있음 — 지금은 "에러가 튀는 시점"을 대략 잡는 용도로 충분하다고 판단). 대시보드에
+"Application Error Count"(시계열 그래프)와 "최근 에러 로그"(Logs Insights 쿼리 결과를 보여주는
+`log` 타입 위젯, `query`로 `filter log like /ERROR/`) 2개 추가.
+
+**트러블슈팅**: 로그 관련 위젯 3개(수집량/에러카운트/최근에러로그)를 위젯 하나짜리
+리스트 리터럴에 전부 넣었더니 `terraform validate`가 "Inconsistent conditional result
+types"로 실패 — 위젯마다 `properties`의 키 구성이 달라서(`metrics` 있는 것 vs `query` 있는
+것) Terraform이 하나의 리스트 리터럴 안에서 타입을 통일하지 못했다. `dashboard_widget_alarms`
+루프처럼 위젯 하나당 local 하나로 쪼갠 뒤 `concat()`으로 합치는 방식으로 고쳐서 해결 —
+concat 인자로 넘기는 리스트끼리는 서로 모양이 달라도 되지만, 리스트 리터럴 하나 안에 섞인
+이질적인 object들은 안 된다는 게 이번에 확인한 제약.
+
+적용 후 `aws cloudwatch get-dashboard`로 위젯 10개(기존 7개 + 로그 3개) 확인,
+`aws logs describe-metric-filters`로 필터 등록 확인.

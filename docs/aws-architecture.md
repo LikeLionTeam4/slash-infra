@@ -347,7 +347,8 @@ Terraform 밖에서 별도로 작업할 필요는 없다 — AWS provider가 Clo
     - Valkey: `EngineCPUUtilization`(80% 초과), `DatabaseMemoryUsagePercentage`(80% 초과), Eviction 발생(1건 이상)
     - GPU 노드 사용률 알람은 여전히 없음 — GPU 노드그룹 자체를 안 만들기로 확정해서(§5-1) 대상이 없음
   - **CloudWatch 대시보드**(`slash-dashboard-dev`, 2026-08-19, 이슈 #44) — 위 7개 알람을 `annotations.alarms`로 참조하는 위젯으로 묶어 한 화면에서 상태를 볼 수 있게 함(리소스 하나하나 콘솔/CLI로 따로 확인할 필요 없이 팀원이 대시보드 링크 하나만 열면 됨, `modules/observability`의 `dashboard_url` 출력값). EKS 지표는 없음 — Container Insights를 켜지 않으면 EKS는 CloudWatch에 기본 지표를 내보내지 않아서(RDS/ALB/ElastiCache와 달리 자동 발행이 아님), Container Insights 도입 여부가 결정되면 추가.
-  - **EKS 컨트롤플레인 로그(audit/authenticator)는 2026-08-25(이슈 #44/#68)부터 CloudWatch로 나간다** — "누가 클러스터 API에 접근했는지" 감사 목적. api/controllerManager/scheduler 로그는 지금 필요성이 낮아 비용상 보류. 로그 그룹(`modules/eks/logging.tf`)을 EKS보다 먼저 명시적으로 생성해서 EKS 자동 생성 시 보존기간이 무기한으로 잡히는 함정을 피했다 — `log_retention_days` 변수로 보존기간 조정 가능(기본 30일). 애플리케이션 로그 그룹(`aws_cloudwatch_log_group`, 예: `/eks/slash-api-dev`)은 아직 없음 — 파드 로그 수집기(Fluent Bit/Container Insights) 도입 여부와 함께 이슈 #44에서 계속 검토 중.
+  - **EKS 컨트롤플레인 로그(audit/authenticator)는 2026-08-25(이슈 #44/#68)부터 CloudWatch로 나간다** — "누가 클러스터 API에 접근했는지" 감사 목적. api/controllerManager/scheduler 로그는 지금 필요성이 낮아 비용상 보류. 로그 그룹(`modules/eks/logging.tf`)을 EKS보다 먼저 명시적으로 생성해서 EKS 자동 생성 시 보존기간이 무기한으로 잡히는 함정을 피했다 — `log_retention_days` 변수로 보존기간 조정 가능(기본 30일).
+  - **파드 로그(stdout/stderr) 수집은 2026-08-27(이슈 #44)부터 Fluent Bit(`aws-for-fluent-bit`)로 CloudWatch에 나간다** — 파드가 재시작/스케일다운돼도 로그가 남도록 하는 게 목적(`kubectl logs`는 살아있는 파드만 조회 가능). IRSA Role(`modules/eks/fluent_bit_irsa.tf`)과 로그 그룹(`/eks/slash-eks-dev/application`, `modules/eks/logging.tf`)은 Terraform이 관리하고, DaemonSet 자체는 다른 클러스터 애드온과 같은 이유로 `helm install`로 수동 설치(`logging/README.md`). 파드가 죽은 뒤에도 CloudWatch에서 해당 파드 로그 스트림이 그대로 조회되는 것까지 검증 완료. 실사용 트래픽 기준 로그량 실측 후 `log_retention_days` 최종값을 확정할 예정 — `docs/operations-log.md` 참고. 지표(CPU/메모리, Container Insights vs Prometheus/Grafana)는 이슈 #47로 여전히 별개 미결정.
 - **EventBridge — 상시 유지 리소스 삭제 감지**(`modules/observability/critical_deletion_alarms.tf`, 신규 2026-08-21, 이슈 #56 후속)
   - **계기**: 공유 부트캠프 계정에서 다른 팀(`b-student-02`)이 자기 팀 NAT를 반복 생성/삭제하는 apply/destroy 사이클을 돌리다 slash 소유 NAT Gateway 2개까지 실수로 `DeleteNatGateway`로 같이 지운 사고(2026-08-20, `docs/operations-log.md` §19) — private-app 서브넷 아웃바운드가 반나절 끊기며 slash-api의 Cognito JWKS fetch 실패(401 로그인 루프)까지 이어졌다. CloudWatch 알람은 메트릭 기반이라 "리소스가 통째로 사라짐" 자체는 감지하지 못해, 이미 켜져 있는 CloudTrail(`slash-trail`) 관리 이벤트를 EventBridge 기본 이벤트버스가 실시간 수신하는 경로로 별도 감지 체계를 추가했다.
   - EventBridge 규칙 6개 + SNS(같은 `slash-alarms-dev` 토픽) 타깃, `input_transformer`로 사람이 읽을 수 있는 문장으로 가공:
@@ -361,13 +362,15 @@ Terraform 밖에서 별도로 작업할 필요는 없다 — AWS provider가 Clo
 
 ## 11. 환경 전략
 
-local/dev/prod 3단계로 나눈다. **결정(2026-08-12): 팀 전체가 계정 하나(`727646470302`)의 인프라를 공유한다** — local도 예외가 아니다. §2의 "계정은 하나"가 곧 실제 운영 방식이고, 아래 표의 local 행도 이에 맞게 갱신했다(원래는 "local은 팀원마다 다른 계정"으로 설계했었으나, 실제로는 처음부터 전부 이 계정으로 진행돼왔음을 확인). [README §다른 AWS 계정에서 시작하기](../README.md#다른-aws-계정에서-시작하기-팀원용)는 이론상 다른 계정으로 시작하고 싶은 경우를 위해 남겨두지만, 팀의 기본 운영 방식은 아니다.
+local/dev/prod 3단계로 나눈다. **결정(2026-08-12): 팀 전체가 계정 하나의 인프라를 공유한다** — local도 예외가 아니다. §2의 "계정은 하나"가 곧 실제 운영 방식이고, 아래 표의 local 행도 이에 맞게 갱신했다(원래는 "local은 팀원마다 다른 계정"으로 설계했었으나, 실제로는 처음부터 전부 이 계정으로 진행돼왔음을 확인). [README §다른 AWS 계정에서 시작하기](../README.md#다른-aws-계정에서-시작하기-팀원용)는 이론상 다른 계정으로 시작하고 싶은 경우를 위해 남겨두지만, 팀의 기본 운영 방식은 아니다.
+
+**계정 번호는 `061039804626`이다** — 이 절의 결정 당시 계정은 `727646470302`였지만, 부트캠프 계정이 2026-08-13에 재발급되면서 전환됐다(`docs/operations-log.md` §3의 2026-08-13 "부트캠프 계정 재발급 발견 및 대응" 항목 참고). 아래 표는 그 결정이 내려진 시점의 서술이라 계정 번호만 최신화하고 날짜·이슈 링크는 그대로 둔다.
 
 | 환경 | 역할 | 스펙 | 계정 | 상태 |
 | --- | --- | --- | --- | --- |
-| **local** | 개인 맥북에서 `terraform apply`하는 실험용 — 모듈 변경을 실제 AWS에서 검증 | 최소 구성 (`environments/local/*` 그대로) | **이 계정(`727646470302`)을 팀 전체가 공유**(2026-08-12 확정) — `slash-local` AWS CLI 프로필도 같은 계정을 가리킴. ECR처럼 계정 전체가 공유하는 자원은 `environments/bootstrap`으로 소유권을 모아 환경 간 충돌을 막는다(§6). `network`/`frontend`/`cognito`는 dev 상시운영 전환으로 역할이 흡수돼 destroy(2026-08-18) — 필요할 때마다 apply→destroy 반복하는 모듈 검증용 테스트베드로 되돌아감. `eks`도 검증용, 마찬가지로 apply→destroy 반복 |
-| **dev** | prod와 거의 동일한 스펙을 유지하는 공유 테스트 서버 — 팀 전체가 QA에 사용 | prod와 동일 모듈, 동일 값(인스턴스 크기 등) | **이 계정(`727646470302`)으로 확정**(2026-08-11, [이슈 #13](https://github.com/LikeLionTeam4/slash-infra/issues/13)) — prod와 같은 계정을 공유, `Environment=dev` 태그와 리소스명 접미사(`-dev`)로만 구분 | **상시 운영 중**(2026-08-18 전환, [이슈 #24](https://github.com/LikeLionTeam4/slash-infra/issues/24), `docs/operations-log.md` §11) — 이전엔 검증 라운드마다 destroy했지만, 서비스 저장소 CI가 이미지를 push하면 자동으로 dev에 반영되려면 dev가 항상 떠 있어야 해서 전환 |
-| **prod** | 실제 운영 환경 | Multi-AZ, 가용성 우선 | **이 계정(`727646470302`)으로 확정.** `sbsh.cloud` 도메인 위임(가비아 NS)이 이미 이 계정의 Route53 zone을 가리키고 있어서, prod의 apex 도메인(§2)도 결국 이 계정에 있어야 한다 — 별도 prod 계정으로 나중에 재위임하지 않기로 함. 나머지 담당자는 이 계정에 IAM 사용자만 추가 | 미구축 |
+| **local** | 개인 맥북에서 `terraform apply`하는 실험용 — 모듈 변경을 실제 AWS에서 검증 | 최소 구성 (`environments/local/*` 그대로) | **이 계정(`061039804626`)을 팀 전체가 공유**(2026-08-12 확정) — `slash-local` AWS CLI 프로필도 같은 계정을 가리킴. ECR처럼 계정 전체가 공유하는 자원은 `environments/bootstrap`으로 소유권을 모아 환경 간 충돌을 막는다(§6). `network`/`frontend`/`cognito`는 dev 상시운영 전환으로 역할이 흡수돼 destroy(2026-08-18) — 필요할 때마다 apply→destroy 반복하는 모듈 검증용 테스트베드로 되돌아감. `eks`도 검증용, 마찬가지로 apply→destroy 반복 |
+| **dev** | prod와 거의 동일한 스펙을 유지하는 공유 테스트 서버 — 팀 전체가 QA에 사용 | prod와 동일 모듈, 동일 값(인스턴스 크기 등) | **이 계정(`061039804626`)으로 확정**(2026-08-11, [이슈 #13](https://github.com/LikeLionTeam4/slash-infra/issues/13)) — prod와 같은 계정을 공유, `Environment=dev` 태그와 리소스명 접미사(`-dev`)로만 구분 | **상시 운영 중**(2026-08-18 전환, [이슈 #24](https://github.com/LikeLionTeam4/slash-infra/issues/24), `docs/operations-log.md` §11) — 이전엔 검증 라운드마다 destroy했지만, 서비스 저장소 CI가 이미지를 push하면 자동으로 dev에 반영되려면 dev가 항상 떠 있어야 해서 전환 |
+| **prod** | 실제 운영 환경 | Multi-AZ, 가용성 우선 | **이 계정(`061039804626`)으로 확정.** `sbsh.cloud` 도메인 위임(가비아 NS)이 이미 이 계정의 Route53 zone을 가리키고 있어서, prod의 apex 도메인(§2)도 결국 이 계정에 있어야 한다 — 별도 prod 계정으로 나중에 재위임하지 않기로 함. 나머지 담당자는 이 계정에 IAM 사용자만 추가 | 미구축 |
 
 - local에서 검증된 모듈을 그대로 dev/prod에 재사용한다 — 모듈 코드 자체는 세 환경이 동일하고, `environments/<env>/` root의 변수 값만 다르다.
 - local이 dev/prod와 값만 다른 게 아니라 **아예 빠지는 것도 있다**: NAT Gateway는 local만 1개(§4), RDS Multi-AZ는 dev/prod만 활성화(§7-1), **백엔드 CI/CD 파이프라인(GitHub Actions + ArgoCD, §9)은 dev부터만 적용**하고 local은 수동 배포로 충분하다. 단 **프론트엔드 CI/CD(§9-2)는 예외** — local부터 검증한다.
@@ -392,7 +395,7 @@ local/dev/prod 3단계로 나눈다. **결정(2026-08-12): 팀 전체가 계정 
 
 다음 인터뷰 라운드에서 채워야 할 항목:
 
-- ~~dev 환경의 계정 구조~~ → prod와 같은 계정(`727646470302`)을 공유하는 것으로 확정(2026-08-11, §11, [이슈 #13](https://github.com/LikeLionTeam4/slash-infra/issues/13)). 다음 단계는 `environments/dev/` 착수
+- ~~dev 환경의 계정 구조~~ → prod와 같은 계정(`061039804626`, 2026-08-13 재발급 전엔 `727646470302`)을 공유하는 것으로 확정(2026-08-11, §11, [이슈 #13](https://github.com/LikeLionTeam4/slash-infra/issues/13)). 다음 단계는 `environments/dev/` 착수
 - `slash_demo` DB를 실제로 어떻게 만들지 — **추천(2026-08-12): EKS 안의 일회성 Job.** SSM 포트포워딩용 별도 bastion EC2를 새로 세우는 것보다, 이미 만드는 EKS 노드가 private-app 서브넷에서 DB SG로 가는 경로를 이미 갖고 있어(§4-1) 추가 리소스·보안 표면 없이 `postgres` 클라이언트 이미지로 `CREATE DATABASE slash_demo;` 한 번 실행하고 지우면 된다. dev DB를 실제로 쓰기 시작하는 시점에 적용
 - Karpenter 실제 설치(Helm, NodePool/EC2NodeClass) — IRSA Role은 `eks` 모듈에 준비됐지만 한 번도 설치해본 적 없음(§5)
 - RAG 인덱싱 파이프라인 실측 후 RDS 인스턴스 클래스·CloudWatch 임계치 재조정(§7-3) — `slash-api`의 색인 파이프라인이 dev에 실제로 붙기 전까지는 보류, `db.t4g.small` 유지
@@ -404,7 +407,7 @@ local/dev/prod 3단계로 나눈다. **결정(2026-08-12): 팀 전체가 계정 
 - ~~Helm chart를 slash-infra 내부에 둘지, 별도 저장소로 분리할지~~ → **결정: `slash-infra` 내부(`helm/`)로 확정**(2026-08-11). Terraform이 만드는 IRSA Role ARN 등과 값이 맞물려 있어 같은 저장소/같은 PR로 바꾸는 게 안전하고, 지금 규모(단일 담당자, 남은 기간 짧음)에서 저장소를 나누는 비용이 더 크다고 판단. CI가 이미지 태그를 자주 커밋하기 시작해 git log가 지저분해지면 그때 분리 재검토
 - CloudTrail 로그 보관 기간(지금은 90일 잠정 기본값), CloudWatch 알람의 실제 임계값(지금은 잠정값) — 트래픽 실측 후 조정
 - ~~ALB Ingress가 생기면 그 알람(5xx 비율, 레이턴시)을 `modules/observability`에 추가~~ → **완료(2026-08-19, 이슈 #43)**, Valkey 알람도 같이 채움. GPU 사용률 알람은 GPU 노드그룹을 안 만들기로 확정(§5-1)해서 대상 없음
-- EKS 컨트롤플레인/파드 로그 수집 여부, Container Insights 도입 여부 — 비용 대비 효과 검토 중(이슈 #44)
+- ~~EKS 컨트롤플레인/파드 로그 수집 여부~~ → **완료(2026-08-25 컨트롤플레인, 2026-08-27 파드/Fluent Bit, 이슈 #44)**, §10 참고. Container Insights(지표) 도입 여부는 여전히 미결정 — 비용 대비 효과 검토 중(이슈 #47)
 - 파드 리소스 지표(CPU/메모리)를 CloudWatch로 — Container Insights vs Prometheus/Grafana 자체 호스팅 검토 중(이슈 #47). `metrics-server`(§5)로 순간 스냅샷은 가능하나 이력·알람은 아직 없음
 - `Owner` 태그를 지금부터 붙일지, 팀이 나뉘는 시점부터 붙일지
 - Valkey(ElastiCache) 정확한 노드 타입/개수 (§7-2, 캐시 대상 데이터와 세션 규모 확정 후)
