@@ -1,6 +1,7 @@
 # slash-infra
 
-**Slash** — 자연어로 PC 작업을 지시하는 서비스 — 를 올리는 AWS 인프라 저장소. Terraform으로
+**Slash** — 자연어 질문과 `/` 슬래시 명령어를 한 입력창에서 함께 쓰는 AI 에이전트 서비스
+(`/`는 이 프로덕트의 이름이자 로고이자 명령어 트리거) — 를 올리는 AWS 인프라 저장소. Terraform으로
 역할별 재사용 모듈(`modules/`)을 만들고, 환경(`environments/`)에서 조합해 적용한다.
 애플리케이션 배포는 Helm 차트(`helm/`) + ArgoCD(GitOps)로 별도 관리한다.
 
@@ -19,20 +20,26 @@
 
 ## 개요
 
-Slash 백엔드 서비스군(`slash-api`/`slash-nlu`/`slash-llm`)과 프론트엔드(`slash-web`)가
-올라가는 AWS 인프라 전체를 코드로 정의한다. `slash-runner`(사용자 PC에서 로컬 실행)는
-AWS 범위 밖이라 이 저장소가 다루지 않는다.
+Slash 백엔드 서비스군(`slash-api`/`slash-nlu`, 그리고 현재는 배포하지 않는 `slash-llm`)과
+프론트엔드(`slash-web`)가 올라가는 AWS 인프라 전체를 코드로 정의한다.
+`slash-runner`(사용자 PC에서 로컬 실행)는 AWS 범위 밖이라 이 저장소가 다루지 않는다.
 
 ```mermaid
 flowchart LR
     U["사용자 브라우저"] -->|HTTPS| CF["CloudFront\ndev.sbsh.cloud"]
     U -->|HTTPS| ALB["ALB\napi.dev.sbsh.cloud"]
-    ALB --> EKS["EKS (slash-api/nlu/llm)\nArgoCD GitOps"]
+    ALB --> EKS["EKS (slash-api/nlu)\nArgoCD GitOps"]
     EKS --> RDS[("RDS PostgreSQL")]
     EKS --> VALKEY[("Valkey")]
-    EKS --> OLLAMA["Ollama EC2\n(GPU, EKS 밖)"]
     U <-.->|Hosted UI| COG["Cognito"]
 ```
+
+**2026-08-25부터 LLM/GPU 경로는 쓰지 않는다** — 제품 방향이 "클라우드에서 LLM을 직접
+제공하지 않는다"로 바뀌면서 `slash-llm`의 EKS 배포와 Ollama EC2를 모두 destroy했다.
+요약 기능은 `slash-api`가 `SUMMARY_ENGINE=EXTRACTIVE`(기본값)로 `slash-nlu`를 거쳐
+처리한다. `modules/llm-runtime`/`helm/slash-llm` 코드는 남아있어 필요해지면
+`terraform apply` 한 번으로 복원 가능 — 상세는 [`docs/operations-log.md`](docs/operations-log.md)
+§23("GPU/클라우드 LLM 인프라 정리") 참고.
 
 전체 토폴로지와 설계 근거는 [`docs/aws-architecture.md`](docs/aws-architecture.md), 요청
 한 건이 실제로 어떤 경로를 타는지는 [`docs/user-flow.md`](docs/user-flow.md) 참고.
@@ -49,7 +56,7 @@ modules/
   network/             VPC + 3-tier 서브넷(public/private-app/private-db) + SG + S3 Gateway Endpoint + VPC Flow Log
   eks/                 EKS 클러스터 + 관리형 노드그룹 + IRSA(OIDC) + Karpenter/ALB Controller Role + ECR 참조
   database/            RDS PostgreSQL(Multi-AZ) + Valkey(ElastiCache) + Secrets Manager
-  llm-runtime/          Ollama용 GPU EC2(g4dn.xlarge) — EKS 밖 독립 인스턴스
+  llm-runtime/          Ollama용 GPU EC2(g4dn.xlarge) — 2026-08-25 destroy, 코드만 보존(휴면)
   cognito/              Cognito Hosted UI (EMAIL_OTP, OAuth2 code+PKCE)
   observability/        CloudWatch 알람(RDS/ALB/Valkey) + SNS
   frontend-hosting/     S3 + CloudFront + ACM + Route53 (slash-web 정적 호스팅)
@@ -82,7 +89,7 @@ docs/                   아키텍처·보안·운영·리소스 소유권·기�
 | 앱 배포 | Helm 차트 → ArgoCD (GitOps), 서비스 CI가 `values-dev.yaml`에 이미지 태그 직접 커밋 |
 | CI/CD (서비스 저장소) | GitHub Actions → OIDC(임시 자격증명) → ECR push |
 | 컨테이너 오케스트레이션 | Amazon EKS (관리형 노드그룹 + Karpenter) |
-| LLM 런타임 | Ollama(`gemma3:4b`) — GPU 노드그룹 대신 독립 EC2(`g4dn.xlarge`) |
+| 요약 기능 | `slash-api`(`SUMMARY_ENGINE=EXTRACTIVE`) → `slash-nlu` — LLM/GPU 경로는 2026-08-25 destroy(휴면) |
 | 데이터베이스 | RDS PostgreSQL 16(Multi-AZ), ElastiCache Valkey(AUTH+TLS) |
 | 인증 | Amazon Cognito Hosted UI (`EMAIL_OTP`, OAuth2 code+PKCE) |
 | 프론트엔드 호스팅 | S3 + CloudFront + ACM + Route53 |
@@ -197,7 +204,9 @@ aws eks update-kubeconfig --name slash-eks-dev --region ap-northeast-2 --profile
 | --- | --- |
 | slash-api | 2/2 |
 | slash-nlu | 2/2 |
-| slash-llm | 1/1 (Ollama EC2가 꺼져 있으면 `/ready`가 503을 반환해 Progressing 상태로 보일 수 있음 — 버그 아님, [`docs/aws-current-status.md`](docs/aws-current-status.md) 참고) |
+
+`slash-llm`은 2026-08-25 EKS 배포 자체를 destroy해서 위 목록에 없다(위 [개요](#개요) 참고) —
+Headlamp에도 보이지 않는 게 정상이다.
 
 숫자가 다르면: 해당 디플로이먼트 클릭 → `Running`이 아닌 파드 클릭 → 로그/Events로
 원인 확인. ReplicaSet 목록은 안 봐도 된다 — 배포마다 쌓이는 이력이라 대부분 `0/0`이
