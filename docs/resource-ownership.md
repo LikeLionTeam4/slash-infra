@@ -4,7 +4,8 @@
 `docs/aws-architecture.md`의 §3(state)·§6(ECR)·§9-1(backend-cicd)·§11(환경 전략)에 흩어진
 소유권 결정을 모았다 — 전부 "계정 공용 자원은 `bootstrap`, 환경별 자원은 그 환경 디렉터리"
 원칙(§6)을 따르지만, 실제로 ECR을 `modules/eks`에서 `bootstrap`으로 옮긴 적이 있어서(§6)
-그림으로 안 남기면 다시 헷갈리기 쉽다. 기준: 2026-08-19, 각 `environments/*/main.tf`의
+그림으로 안 남기면 다시 헷갈리기 쉽다. 기준: 2026-08-19(2026-08-25 bootstrap state 이전·
+llm-runtime 휴면 반영해 일부 갱신), 각 `environments/*/main.tf`의
 `backend`/`terraform_remote_state`/모듈 호출 실제 코드.
 
 ## ⚠️ 계정 자체가 공유 강의용 계정
@@ -23,7 +24,7 @@ IAM 사용자가 이 계정을 같이 쓰고 있다(2026-08-20 확인).
 
 ```mermaid
 flowchart TB
-    subgraph BOOTSTRAP["environments/bootstrap\n계정당 최초 1회, state는 로컬(닭-달걀 문제, §3)"]
+    subgraph BOOTSTRAP["environments/bootstrap\n계정당 최초 1회, state는 S3(2026-08-25 이전, 이슈 #66)"]
         STATE["S3: Terraform state 버킷\nslash-tfstate-&lt;account_id&gt;"]
         R53Z["Route53: sbsh.cloud zone"]
         ECR3["ECR: slash-api / slash-nlu / slash-llm"]
@@ -42,7 +43,7 @@ flowchart TB
         D_COG["cognito"]
         D_DB["database"]
         D_EKS["eks"]
-        D_LLM["llm-runtime"]
+        D_LLM["llm-runtime\n(휴면 — 2026-08-25 destroy, 코드만 보존)"]
         D_OBS["observability"]
         D_FE["frontend"]
     end
@@ -54,7 +55,7 @@ flowchart TB
     STATE -.->|"backend \"s3\" 로 참조"| DEV
     STATE -.->|"backend \"s3\" 로 참조(예정)"| PROD
 
-    R53Z -.->|"zone_id 정적 값 복사\n(bootstrap state가 로컬이라 remote_state 불가)"| D_FE
+    R53Z -.->|"zone_id 정적 값 복사\n(remote_state 미전환, 아래 참고)"| D_FE
     R53Z -.-> D_EKS
     R53Z -.-> D_COG
     ECR3 -.->|"image pull (sha- 태그, IMMUTABLE)"| D_EKS
@@ -72,14 +73,20 @@ flowchart TB
 - **`bootstrap`이 소유하는 것들의 공통점**: "계정 하나에 한 번만 있어야 하는 자원"이다.
   ECR 리포지토리 이름이 겹치면 `local`/`dev`가 서로 충돌하고(§6), Route53 zone은 애초에
   계정에 1개, state 버킷은 그 자체가 다른 모든 환경의 backend이므로 먼저 있어야 한다(§3).
-- **`bootstrap` 자신의 state는 로컬로 남아있다** — state 버킷을 만드는 그 순간엔 아직
-  참조할 backend가 없는 최초 리소스라서다(§3). 이 때문에 `dev`/`prod`가 `bootstrap`의
-  출력값을 `terraform_remote_state`로 끌어오지 못하고, `route53_zone_id`나 ECR
-  리포지토리 URL 같은 값을 **정적으로 코드에 복사**해서 쓴다(`environments/dev/eks/domain.tf`
-  의 주석이 이 이유를 명시). 즉 위 그림의 점선(bootstrap → dev)은 자동으로 갱신되는
-  연결이 아니라 사람이 손으로 맞춰야 하는 연결이다 — bootstrap을 재apply해서 값이
-  바뀌면 dev 쪽 정적 값도 같이 갱신해야 한다(실제로 §11 트러블슈팅에 "계정 재발급 후
-  정적 zone ID가 옛 계정 값으로 남아있었다" 사례가 있음).
+- **`bootstrap` 자신의 state는 처음엔 로컬이었다가 2026-08-25(이슈 #66)부터 S3로 옮겨졌다**
+  — state 버킷을 만드는 그 순간엔 아직 참조할 backend가 없는 최초 리소스라 로컬로
+  시작했지만, 이제 그 버킷이 이미 존재하므로 자기 자신을 재사용해 옮겼다(로컬 state가
+  원 작성자 컴퓨터에만 있어 다른 팀원이 관리 못 하던 문제 해소, 기존 리소스 25개는
+  재import 없이 그대로 승계). **다만 `dev`/`prod`가 `bootstrap`의 출력값을
+  `terraform_remote_state`로 끌어오도록 전환되진 않았다** — `route53_zone_id`나 ECR
+  리포지토리 URL 같은 값은 여전히 **정적으로 코드에 복사**해서 쓴다
+  (`environments/dev/eks/domain.tf`의 주석은 아직 "state가 로컬이라 remote_state 불가"라고
+  옛 이유를 적어두고 있는데, 이제는 기술적 제약이 아니라 단순히 아직 전환 작업을 안 한
+  것 — 코드 주석 갱신은 별도 확인 필요). 즉 위 그림의 점선(bootstrap → dev)은 지금도
+  자동으로 갱신되는 연결이 아니라 사람이 손으로 맞춰야 하는 연결이다 — bootstrap을
+  재apply해서 값이 바뀌면 dev 쪽 정적 값도 같이 갱신해야 한다(실제로 §11 트러블슈팅에
+  "계정 재발급 후 정적 zone ID가 옛 계정 값으로 남아있었다" 사례가 있음). 상세는
+  [`docs/operations-log.md`](operations-log.md) §24 참고.
 - **`local`은 지금 대부분 비어있다** — 처음엔 팀원이 각자 실험하는 환경으로 설계됐지만,
   실제로는 계정을 공유하기로 확정(§11)되면서 `network`/`frontend`/`cognito`가 `dev`
   상시운영 전환 시점에 역할이 완전히 겹쳐 destroy됐다. **`local/eks`만 예외**로 남아있다 —
@@ -97,15 +104,15 @@ flowchart TB
 
 | 모듈 | 소유 디렉터리 | state backend | 핵심 의존성 |
 | --- | --- | --- | --- |
-| `ecr` | `bootstrap` | 로컬 | 없음 |
-| Route53 zone | `bootstrap` | 로컬 | 없음 |
-| `backend-cicd` ×3 | `bootstrap` | 로컬 | `ecr` (같은 root 내 참조) |
-| CloudTrail / Budgets | `bootstrap` | 로컬 | 없음 |
+| `ecr` | `bootstrap` | S3 (2026-08-25 이전, 이슈 #66) | 없음 |
+| Route53 zone | `bootstrap` | S3 (2026-08-25 이전, 이슈 #66) | 없음 |
+| `backend-cicd` ×3 | `bootstrap` | S3 (2026-08-25 이전, 이슈 #66) | `ecr` (같은 root 내 참조) |
+| CloudTrail / Budgets | `bootstrap` | S3 (2026-08-25 이전, 이슈 #66) | 없음 |
 | `network` | `dev` (local은 destroy됨) | S3 | 없음 |
 | `cognito` | `dev` (local은 destroy됨) | S3 | 없음 (zone_id만 정적 참조) |
 | `database` | `dev` (local은 미적용 상태였음) | S3 | `network` |
 | `eks` | `dev` + `local`(테스트베드) | S3 / 로컬 | `network`, `database` |
-| `llm-runtime` | `dev` | S3 | `network` |
+| `llm-runtime` | `dev` — **휴면**(2026-08-25 destroy, 코드만 보존) | S3 | `network` |
 | `observability` | `dev` (local은 미적용 상태였음) | S3 | `database` |
 | `frontend` | `dev` (local은 destroy됨) | S3 | 없음 (zone_id만 정적 참조) |
 | 전체 | `prod` | 미구축 | — |

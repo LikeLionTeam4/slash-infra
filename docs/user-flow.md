@@ -18,8 +18,8 @@ flowchart LR
     U <-->|Hosted UI 리다이렉트| COG["Cognito\nHosted UI"]
     ALB --> API["slash-api\n(EKS)"]
     API --> NLU["slash-nlu\n(EKS, ClusterIP)"]
-    API --> LLM["slash-llm\n(EKS, ClusterIP)"]
-    LLM --> OLLAMA["Ollama\nEC2 10.8.11.172:11434\n(private-app 서브넷)"]
+    API -.->|"휴면 (2026-08-25~)"| LLM["slash-llm\n(EKS, ClusterIP)"]
+    LLM -.->|휴면| OLLAMA["Ollama\nEC2 (destroy됨)\n(private-app 서브넷)"]
     API <--> RDS[("RDS PostgreSQL\nprivate-db")]
     API <--> VALKEY[("Valkey\nprivate-db")]
     AGENT["slash-runner\n(사용자 PC, 로컬)"] -.WSS 상시연결.-> API
@@ -60,15 +60,24 @@ sequenceDiagram
   `slash-web` 클라이언트 구현 소관이라 이 저장소 기준으로는 미확인 — `generate_secret = false`
   (public client)인 점으로 미루어 브라우저 직접 교환일 가능성이 높다는 추정만 남긴다.
 
-## 2. 자유입력 요청 처리 (✅ 2026-08-18, §11-10)
+## 2. 자유입력 요청 처리 (✅ 2026-08-18 확인, ⚠️ LLM 구간은 2026-08-25부로 휴면)
+
+> **2026-08-25 갱신**: 아래 다이어그램의 `slash-api → slash-llm → Ollama` 구간은
+> **더 이상 실행되지 않는다.** `slash-api`는 `SUMMARY_ENGINE=EXTRACTIVE`(기본값,
+> dev 포함 모든 환경에서 오버라이드 없음)로 동작해 `slash-llm`/Ollama를 거치지 않고
+> 요약을 처리한다 — `LlmClient`/`routeToLlm` 코드는 남아있지만 `SUMMARY_ENGINE=GEMMA`로
+> 바꾸지 않는 한 도달 불가능한 dead code다. `slash-llm`의 EKS 배포와 Ollama EC2는
+> 실제로 destroy됐다. 아래는 GEMMA 경로가 살아있던 시점의 기록이며, EXTRACTIVE 경로가
+> 정확히 어떤 시퀀스로 처리되는지는 아직 이 문서에서 재확인하지 않았다 — 상세는
+> [`docs/operations-log.md`](operations-log.md) §23 참고.
 
 ```mermaid
 sequenceDiagram
     participant B as 브라우저 (dev.sbsh.cloud)
     participant API as slash-api (EKS)
     participant NLU as slash-nlu (ClusterIP)
-    participant LLM as slash-llm (ClusterIP)
-    participant OLL as Ollama (EC2:11434)
+    participant LLM as slash-llm (ClusterIP, 휴면)
+    participant OLL as Ollama (EC2:11434, 휴면)
 
     B->>API: POST /api/v1/requests {text: "오늘 날씨 어때"}
     API->>NLU: 의도 분류 요청
@@ -78,6 +87,7 @@ sequenceDiagram
     B->>API: POST /api/v1/requests {text: "서울 날씨 어때"} (신규 요청, correlationId 없음)
     API->>NLU: 의도 분류
     NLU-->>API: 의도 확정
+    Note over API,OLL: 2026-08-25부터 휴면 — SUMMARY_ENGINE=GEMMA일 때만 아래 경로 실행
     API->>LLM: 프롬프트 구성 요청
     LLM->>OLL: 추론 요청 (gemma3:4b)
     OLL-->>LLM: 응답
@@ -92,9 +102,10 @@ sequenceDiagram
   (근거: `slash-api/docs/frontend-api-contract.md` W1-04, `docs/operations-log.md` §11-10)
 - 브라우저 → 백엔드 결과 수신은 **폴링**이다. `slash-web`에 WebSocket 클라이언트 자체가 없다
   (agent와의 흐름과 혼동하지 말 것, §3 참고).
-- `slash-nlu`/`slash-llm`은 각각 `/health`(liveness)와 `/ready`(readiness)가 분리돼 있다
-  (§11-4, §11-9) — Ollama가 죽어도 `slash-llm`의 `/health`는 여전히 `ok`를 반환하는 known gap
-  (`docs/aws-architecture.md` §5-1 "미해결" 참고, readinessProbe에 아직 미반영).
+- `slash-nlu`/`slash-llm`은 각각 `/health`(liveness)와 `/ready`(readiness)가 분리돼 있었다
+  (§11-4, §11-9) — Ollama가 죽어도 `slash-llm`의 `/health`는 여전히 `ok`를 반환하는 known gap이
+  있었으나(`docs/aws-architecture.md` §5-1 "미해결" 참고), `slash-llm` 자체가 휴면 상태라
+  지금은 관측 대상이 아니다.
 
 ## 3. 로컬 에이전트 페어링 (✅ 페어링/연결까지 검증, 🔲 실제 작업 위임은 미확인)
 
@@ -132,8 +143,8 @@ sequenceDiagram
 | 백엔드 API | `https://api.dev.sbsh.cloud` | ALB, `environments/dev/eks/domain.tf` |
 | Cognito Hosted UI | `<name_prefix>-dev-<account_id>.auth.ap-northeast-2.amazoncognito.com` | `modules/cognito/main.tf` |
 | slash-nlu | 클러스터 내부 `http://slash-nlu` (8001) | 외부 노출 없음 |
-| slash-llm | 클러스터 내부 (8000) | 외부 노출 없음 |
-| Ollama | `10.8.11.172:11434` (private) | EKS SG에서만 인바운드 허용 |
+| slash-llm (휴면, 2026-08-25~) | — | EKS 배포 destroy됨, 코드만 보존 |
+| Ollama (휴면, 2026-08-25~) | — | EC2 destroy됨, `modules/llm-runtime` 코드만 보존 |
 
 ## 5. 알려진 갭 / 다음 확인 대상
 
@@ -141,5 +152,8 @@ sequenceDiagram
   실제로 눌러봐서 agent가 개입하는지 네트워크 트래픽으로 확인 필요.
 - 대화형 스레드(`GENERAL_CHAT`) 도입 시 이 문서의 §2 시퀀스(매 요청 stateless) 전체를
   다시 그려야 함 — `slash-web` 이슈 #34 진행 상황에 연동.
-- `slash-llm` `/health`가 Ollama 상태를 반영하지 않는 gap이 readinessProbe에 반영되면
-  §2 다이어그램에 실패 경로(Ollama 다운 시 어떻게 사용자에게 보이는지)를 추가할 것.
+- §2의 `SUMMARY_ENGINE=EXTRACTIVE` 경로가 정확히 어떤 호출 시퀀스로 처리되는지 아직
+  이 문서에서 확인하지 않았다 — 다음 세션에서 실제 요약 요청을 눌러보고 다이어그램을
+  갱신할 것(`docs/operations-log.md` §23 후속).
+- ~~`slash-llm` `/health`가 Ollama 상태를 반영하지 않는 gap~~ → `slash-llm` 자체가 휴면
+  상태라 더 이상 관측 대상 아님(2026-08-25).

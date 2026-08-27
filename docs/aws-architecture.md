@@ -120,7 +120,7 @@ flowchart TB
 - state 저장용 S3 버킷 1개 — 버저닝 활성화, 서버사이드 암호화, 퍼블릭 액세스 완전 차단. `environments/bootstrap/`에서 코드로 관리.
 - 같은 `environments/bootstrap/`이 local/dev/prod가 공유하는 Route53 hosted zone(`sbsh.cloud`)도 함께 관리한다 — state 백엔드처럼 "모든 환경이 의존하는 최초 1회 자원"이라는 성격이 같아서 묶었다. 향후 ECR, CloudTrail처럼 환경 공통 자원이 늘어나면 같은 위치에 추가한다.
 - 락은 `backend "s3" { ..., use_lockfile = true }` 설정만으로 처리되고, 별도 DynamoDB 테이블은 만들지 않는다.
-- 부트스트랩 리소스(state용 S3 버킷) 자체의 state는 로컬로 둔다 — 아직 참조할 backend가 없는 최초 리소스라 생기는 닭-달걀 문제. `apply` 후 로컬 state 파일은 백업해두고, 유실돼도 버킷 이름이 계정 ID로 결정되는 값이라 `terraform import`로 복구 가능.
+- **부트스트랩 리소스(state용 S3 버킷) 자체의 state는 처음엔 로컬로 뒀다** — 아직 참조할 backend가 없는 최초 리소스라 생기는 닭-달걀 문제. **2026-08-25(이슈 #66)부터는 자기 자신이 만든 버킷을 재사용해 S3로 이전 완료** — 로컬 state가 원 작성자 컴퓨터에만 있어 다른 팀원이 이 환경을 관리할 수 없던 문제를 해소했다(`backend "s3" { bucket = "slash-tfstate-061039804626", key = "bootstrap.tfstate" }`, 기존 리소스 25개는 재import 없이 그대로 승계, `terraform plan` "No changes" 확인). 상세는 [`docs/operations-log.md`](operations-log.md) §24 참고.
 - 이후 만드는 모든 환경(예: `environments/dev/eks-test`)은 이 버킷을 `backend "s3"`로 참조하고, `required_version`을 `>=1.10.0`으로 올려서 `use_lockfile`을 쓴다.
 - 기존 `environments/dev/frontend`도 같은 backend로 옮길지는 별도 확인 후 진행한다 (이번 범위 아님).
 
@@ -341,7 +341,7 @@ Terraform 밖에서 별도로 작업할 필요는 없다 — AWS provider가 Clo
     - Valkey: `EngineCPUUtilization`(80% 초과), `DatabaseMemoryUsagePercentage`(80% 초과), Eviction 발생(1건 이상)
     - GPU 노드 사용률 알람은 여전히 없음 — GPU 노드그룹 자체를 안 만들기로 확정해서(§5-1) 대상이 없음
   - **CloudWatch 대시보드**(`slash-dashboard-dev`, 2026-08-19, 이슈 #44) — 위 7개 알람을 `annotations.alarms`로 참조하는 위젯으로 묶어 한 화면에서 상태를 볼 수 있게 함(리소스 하나하나 콘솔/CLI로 따로 확인할 필요 없이 팀원이 대시보드 링크 하나만 열면 됨, `modules/observability`의 `dashboard_url` 출력값). EKS 지표는 없음 — Container Insights를 켜지 않으면 EKS는 CloudWatch에 기본 지표를 내보내지 않아서(RDS/ALB/ElastiCache와 달리 자동 발행이 아님), Container Insights 도입 여부가 결정되면 추가.
-  - 애플리케이션 로그 그룹(`aws_cloudwatch_log_group`, 예: `/eks/slash-api-dev`)과 EKS 컨트롤플레인 로그는 아직 없음 — 파드 로그 수집기(Fluent Bit/Container Insights) 도입 여부와 함께 이슈 #44에서 검토 중.
+  - **EKS 컨트롤플레인 로그(audit/authenticator)는 2026-08-25(이슈 #44/#68)부터 CloudWatch로 나간다** — "누가 클러스터 API에 접근했는지" 감사 목적. api/controllerManager/scheduler 로그는 지금 필요성이 낮아 비용상 보류. 로그 그룹(`modules/eks/logging.tf`)을 EKS보다 먼저 명시적으로 생성해서 EKS 자동 생성 시 보존기간이 무기한으로 잡히는 함정을 피했다 — `log_retention_days` 변수로 보존기간 조정 가능(기본 30일). 애플리케이션 로그 그룹(`aws_cloudwatch_log_group`, 예: `/eks/slash-api-dev`)은 아직 없음 — 파드 로그 수집기(Fluent Bit/Container Insights) 도입 여부와 함께 이슈 #44에서 계속 검토 중.
 - **CloudTrail** (`environments/bootstrap`)
   - 계정 전체 API 호출 감사용으로 트레일 1개(`aws_cloudtrail`)를 만들고, 로그는 전용 S3 버킷(버저닝 + 수명주기 정책, 잠정 90일 후 만료)에 적재.
   - **왜 환경별 모듈이 아니라 bootstrap에 두나**: CloudTrail은 계정 전체를 감사하는 거라 local/dev/prod가 각자 만들면 같은 계정 안에 트레일이 중복된다 — state 버킷·Route53 zone처럼 "계정당 한 번만" 만드는 자원이라 bootstrap이 자연스러운 자리. 반대로 CloudWatch 알람은 특정 환경의 RDS/EKS를 가리켜야 해서 환경별로 필요.

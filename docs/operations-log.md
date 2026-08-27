@@ -896,3 +896,35 @@ CloudTrail로 `ResourceName=<natId>` 조회해 타임라인 확정:
 **남겨둔 것**: `modules/llm-runtime`, `helm/slash-llm` 코드 자체는 삭제하지 않았다 — 필요해지면 `terraform apply` 한 번으로 복원 가능(모델 재다운로드 등 user_data가 전부 자동화). Ollama용 보안그룹(`modules/network` 소유)은 비용이 없는 리소스라 이번엔 그대로 둠. `#37`(GPU 오토스케일링 검토)은 대상 자체가 없어져 이번 기회에 닫는 게 맞아 보임 — 별도 확인 후 처리.
 
 **교훈**: "고쳐야 할 버그"로 보였던 게 실은 "이미 안 쓰는 자원이라 아무도 안 챙긴 것"이었다 — 인프라 이상을 발견했을 때 반사적으로 "복구"부터 하지 말고, 그 자원이 지금도 제품에 필요한지부터 코드 레벨로 재확인하는 게 먼저라는 걸 이번에 실제로 겪었다.
+
+## 24. bootstrap state를 로컬 → S3로 이전 (이슈 #66, 2026-08-25)
+
+**문제**: `environments/bootstrap`의 state가 로컬 파일로만 존재해 원 작성자의 컴퓨터 없이는 관리할 수 없었다 — 다른 팀원이 `bootstrap`을 apply/수정하려면 원 작성자에게 `terraform.tfstate`를 직접 받아야 하는 상황.
+
+**조치**: 이미 `bootstrap` 자신이 만든 `slash-tfstate-061039804626` 버킷을 재사용해 backend를 S3로 전환. 원 작성자에게 받은 로컬 state를 그대로 옮겨서 리소스 25개를 재import 없이 승계했다.
+
+```hcl
+backend "s3" {
+  bucket       = "slash-tfstate-061039804626"
+  key          = "bootstrap.tfstate"
+  region       = "ap-northeast-2"
+  encrypt      = true
+  use_lockfile = true
+}
+```
+
+이전 후 `terraform plan` "No changes" 확인. 같은 PR에서 `enable_log_file_validation = true`(CloudTrail 로그 파일 다이제스트 검증, 무료)도 함께 추가 — S3 Object Lock은 버킷 생성 시점에만 켤 수 있어 지금은 적용 불가(기존 90일치 감사 로그가 있는 버킷을 재생성해야 함), 다음에 버킷을 새로 만들 일이 생기면 그때 같이 검토.
+
+**남은 일**: `environments/dev/eks/domain.tf` 등 `bootstrap` 출력값을 정적 값으로 복사해 쓰던 곳들은 이번 이전과 무관하게 그대로다 — `terraform_remote_state`로 전환하는 건 별도 작업으로 남겨둠(`docs/resource-ownership.md` "왜 이렇게 나뉘었나" 참고). 관련 코드 주석("state가 로컬이라 remote_state 불가")도 이제 기술적으로는 틀린 이유라 갱신이 필요하지만, 이번 범위에서는 처리하지 않음.
+
+## 25. EKS 컨트롤플레인 로그(audit/authenticator) CloudWatch 연동 (이슈 #44/#68, 2026-08-25)
+
+이슈 #44("장애 대응 시 사후 분석 근거 부재")의 로그 수집 항목 중 EKS 컨트롤플레인 로그 부분을 처리. "누가 클러스터 API에 접근했는지" 감사 목적으로 `audit`/`authenticator` 로그만 우선 활성화 — `api`/`controllerManager`/`scheduler`는 지금 필요성이 낮아 비용상 보류.
+
+- `modules/eks/logging.tf`(신규) — 로그 그룹을 EKS보다 먼저 명시적으로 생성. 안 그러면 EKS가 자동 생성하면서 보존기간을 무기한으로 잡아 비용이 계속 쌓이는 함정이 있다.
+- `modules/eks/cluster.tf` — `enabled_cluster_log_types = ["audit", "authenticator"]` 추가, `aws_cloudwatch_log_group.eks_cluster`를 `depends_on`에 명시.
+- `modules/eks/variables.tf` — `log_retention_days` 변수 추가(기본 30일, prod 등에서 오버라이드 가능).
+
+dev에 적용 후 로그 그룹이 보존기간 30일로 생성된 것, 컨트롤플레인 로깅 상태 전부 실측 확인. `terraform plan` "No changes" 확인.
+
+**남은 일**: 파드/애플리케이션 로그 수집(Fluent Bit vs Container Insights)은 이슈 #44에 계속 남아있음 — `docs/aws-architecture.md` §10 참고.

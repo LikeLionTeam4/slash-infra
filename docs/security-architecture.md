@@ -59,7 +59,7 @@ flowchart LR
     ALB["ALB\n(public 서브넷)"] -->|"443/80 → 파드 포트"| EKS_SG["EKS SG\nself-referencing\n(노드·파드 간 전체 허용)"]
     EKS_SG -->|"5432"| DB_SG["DB SG\n(RDS + Valkey 공용)"]
     EKS_SG -->|"6379"| DB_SG
-    EKS_SG -->|"11434"| OLLAMA_SG["Ollama SG"]
+    EKS_SG -.->|"11434 (대상 EC2 없음 — 휴면)"| OLLAMA_SG["Ollama SG\n(현재 미사용, 2026-08-25~)"]
     EKS_SG -->|"아웃바운드 전체"| NAT["NAT Gateway"]
 
     DB_SG -.->|"인바운드는 EKS SG 뿐, 퍼블릭 액세스 비활성"| NONE1["그 외 인바운드 없음"]
@@ -68,7 +68,9 @@ flowchart LR
 
 - SG는 최소 3종: **EKS SG**(자기 자신 참조 — 노드·파드 간 통신), **DB SG**(RDS 5432 +
   Valkey 6379, 인바운드는 EKS SG에서만), **Ollama SG**(11434, 인바운드는 EKS SG에서만) —
-  `modules/network/main.tf`.
+  `modules/network/main.tf`. **Ollama SG는 2026-08-25 Ollama EC2 destroy 이후 규칙만 남고
+  대상 리소스가 없다** — 비용이 없는 리소스라 정리하지 않고 그대로 뒀다
+  (`docs/operations-log.md` §23).
 - private-db 서브넷은 인터넷 기본 경로 자체가 없다(IGW/NAT 라우트 미부여) — SG 규칙이
   뚫려도 인터넷에서 직접 도달할 경로가 애초에 없는 이중 방어.
 
