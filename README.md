@@ -80,8 +80,9 @@ docs/                   아키텍처·보안·운영·리소스 소유권·기�
 
 ## 기술 스택
 
-인프라 자체는 Terraform IaC이고, 그 위에서 도는 서비스는 폴리글랏 구성이다. 서비스별
-언어/프레임워크 전체 매핑은 [`docs/tech-stack.md`](docs/tech-stack.md) 참고.
+인프라는 Terraform 기반 IaC로 관리하고, 애플리케이션 서비스는 서비스 특성에 따라
+각기 다른 언어·프레임워크를 쓰는 폴리글랏 구성이다. 서비스별 기술 스택은
+[`docs/tech-stack.md`](docs/tech-stack.md) 참고.
 
 | 레이어 | 기술 |
 | --- | --- |
