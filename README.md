@@ -1,6 +1,6 @@
 # slash-infra
 
-**Slash** — 자연어 질문과 `/` 슬래시 명령어를 한 입력창에서 함께 쓰는 AI 에이전트 서비스
+**Slash** — 자연어 질문과 `/` 슬래시 명령어를 한 입력창에서 함께 쓰는 AI 비서 서비스
 (`/`는 이 프로덕트의 이름이자 로고이자 명령어 트리거) — 를 올리는 AWS 인프라 저장소. Terraform으로
 역할별 재사용 모듈(`modules/`)을 만들고, 환경(`environments/`)에서 조합해 적용한다.
 애플리케이션 배포는 Helm 차트(`helm/`) + ArgoCD(GitOps)로 별도 관리한다.
@@ -72,6 +72,7 @@ helm/                   slash-api/nlu/llm Helm 차트 (서비스별 디렉터리
 argocd/                 ArgoCD Application 매니페스트
 external-secrets/       External Secrets Operator 설정 (Secrets Manager → K8s Secret 동기화)
 karpenter/               Karpenter NodePool/EC2NodeClass 매니페스트
+logging/                 Fluent Bit(aws-for-fluent-bit) 설치 문서 — 파드 로그를 CloudWatch Logs로 전송
 docs/                   아키텍처·보안·운영·리소스 소유권·기술 스택 등 설계·운영 문서
 ```
 
