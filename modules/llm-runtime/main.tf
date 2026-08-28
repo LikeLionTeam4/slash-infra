@@ -1,3 +1,14 @@
+# [현재 미적용 모듈] 2026-08-25(PR #70)에 environments/dev/llm-runtime을 terraform
+# destroy 해서 이 모듈이 만드는 자원은 지금 존재하지 않는다. 코드를 지우지 않은 것은
+# terraform apply 한 번으로 복원 가능하게 두기 위해서다(모델 재다운로드까지
+# user_data가 자동화). 되살리려면 slash-api의 SUMMARY_ENGINE=GEMMA 전환이 함께 필요하다.
+#
+# 제거 경위 — slash-docs#3에서 "핵심 가치는 클라우드에서 LLM을 직접 제공하는 것이
+# 아니다"로 제품 방향이 확정되며 요약이 브라우저·PC·서버로 분산됐고, 서버 경로는
+# slash-nlu의 CPU 추출 요약이 맡게 됐다. GPU 고정비 제거가 그 전환의 목적이었다.
+#
+# ---- 아래는 운용하던 당시의 설계 근거 ----
+#
 # Ollama(LLM 추론 런타임)를 돌리는 단독 EC2 — GPU 노드그룹(Karpenter/EKS) 대신 선택한
 # 이유는 docs/aws-architecture.md §5-1 참고: 콜드스타트(0-scale마다 모델 재pull)와
 # 비용($100 계정 전체 예산) 문제.

@@ -71,8 +71,8 @@ module "frontend_cicd" {
   cloudfront_distribution_arn = module.frontend_hosting.cloudfront_distribution_arn
 
   github_repo = "LikeLionTeam4/slash-web"
-  # local/frontend와 같은 이유(TODO) — slash-web의 main이 아직 빈 스텁 브랜치라
-  # dev를 타겟팅. dev->main 첫 정식 릴리스 시 되돌릴 것.
+  # local/frontend와 같은 이유(TODO(#18)) — slash-web의 main이 아직 빈 스텁 브랜치라
+  # dev를 타겟팅. 2026-08-27 재확인, 여전히 릴리스 전. 첫 정식 릴리스 시 되돌릴 것.
   github_branch = "dev"
 
   tags = {
