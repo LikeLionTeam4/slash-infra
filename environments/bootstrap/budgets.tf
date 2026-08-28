@@ -14,6 +14,12 @@
 # GPU 비용이 월 ~$60~85 -> ~$170로 올라 실제 baseline은 위 추정(~$440~475)보다 높다
 # (~$550~560 안팎 추정) — $500 한도를 넘을 수 있다. 한도는 이번엔 다시 안 건드림
 # (docs/operations-log.md §11-5, 비용 재산정은 낮은 우선순위로 보류 확인).
+#
+# 갱신(2026-08-25, PR #70): GPU 자원을 철거해 위 GPU 비용 항목이 사라졌다.
+# environments/dev/llm-runtime을 terraform destroy 하고 slash-llm ArgoCD Application을
+# 제거했다(§23). 남은 baseline은 EKS/RDS(Multi-AZ)/Valkey/NAT 2개의 ~$380~390이고,
+# $500 한도는 여유가 있다 — 위 "$500을 넘을 수 있다"는 더 이상 성립하지 않는다.
+# 클라우드 LLM 추론 비용은 0이다. 한도는 그대로 두었다(변동비 여유와 prod 대비).
 
 resource "aws_budgets_budget" "monthly_cost" {
   name         = "slash-monthly-cost"
