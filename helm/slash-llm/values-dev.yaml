@@ -2,7 +2,7 @@
 # — Ollama는 EKS 밖 별도 EC2(environments/dev/llm-runtime)에서 돈다. nodeSelector/
 # tolerations는 그래서 계속 비워둔다.
 image:
-  tag: "sha-58d66db6dfa6a8373720bf49af708c521975e43e"
+  tag: "sha-89dd698f7c90a40f0a5ddac716f6849e97fd3771"
 
 replicaCount: 1
 
