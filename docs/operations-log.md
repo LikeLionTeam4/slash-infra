@@ -1058,3 +1058,27 @@ concat 인자로 넘기는 리스트끼리는 서로 모양이 달라도 되지�
 **다음에 다시 할 때 참고할 것**:
 - `slash-api`/`slash-nlu` Deployment에 `podAntiAffinity`(같은 노드에 2 replica가 몰리지 않도록) 또는 최소한 `PodDisruptionBudget`(`minAvailable: 1`) 추가를 백로그로 남길 것 — 지금 세션 범위 밖이라 코드 변경은 하지 않음.
 - 이번엔 `cordon+drain`만 했고 EC2 인스턴스 자체를 종료(`terminate-instances`)하지는 않음 — 노드그룹이 desired=3을 유지하려고 새 인스턴스를 실제로 프로비저닝하는 것까지 보려면 그 방식으로 재시도.
+
+## 29. CloudFront/S3 오리진 차단 게임데이 (2026-08-30)
+
+**시나리오**: `docs/resilience-testing.md` §2 ③ "CloudFront/S3 오리진 차단" — 프론트엔드 오리진(S3, `slash-web-dev-061039804626`)에 CloudFront가 접근 못 하게 되면 사용자에게 어떻게 보이는지, 원복 즉시 정상화되는지 확인.
+
+**성공 기준**: 정책 원복 즉시 정상화. (사전 정의했던 "캐시 hit는 계속 정상 응답" 기준은 이번 요청 경로가 마침 캐시 miss였어서 검증하지 못함 — 아래 발견한 문제 참고.)
+
+**사전 확인**: 버킷 태그 `Project=slash` 확인(같은 계정에 `book-eating-lion-*` 등 다른 팀 버킷이 섞여 있어 이름으로 먼저 필터링 후 태그로 재확인). 기존 버킷 정책을 로컬에 백업.
+
+**타임라인** (UTC):
+- 07:14:36 — `aws s3api put-bucket-policy`로 CloudFront OAC principal 대상 `Deny` 문 추가(기존 `Allow` 문 아래에 추가, Deny가 우선 적용)
+- 07:14:4x — Chrome(claude-in-chrome)으로 `https://dev.sbsh.cloud/` 접속 → S3 원본 `AccessDenied` XML 그대로 노출됨(CloudFront의 403 → `/index.html` 200 커스텀 에러 매핑도 함께 실패 — 그 매핑이 조회하려는 `/index.html` 자체도 같은 오리진이라 마찬가지로 거부됨)
+- 07:15:12 — `aws s3api put-bucket-policy`로 백업해둔 원래 정책(Deny 문 제거)으로 원복
+- 07:15:2x — Chrome으로 재접속 → 정상적으로 `/login` 페이지 렌더링 확인
+
+**결과**: 성공 기준 충족 — 정책 원복 후 즉시(수 초 내) 정상화, 별도 무효화(invalidation)나 대기 없이 복구됨. 차단 지속 시간 총 36초.
+
+**발견한 문제**:
+1. **오리진이 완전히 막히면 SPA의 404/403→`/index.html` 커스텀 에러 매핑 자체가 무력화된다.** 원래 이 매핑은 "이 파일은 없지만 사이트는 정상"인 상황(SPA 라우팅)을 위한 건데, "오리진 자체가 안 열리는" 상황에서는 매핑이 가리키는 `/index.html`도 못 가져와서 결국 S3의 raw `AccessDenied` XML이 사용자에게 그대로 노출됨. 즉 지금 구조에서 오리진 완전 장애는 아무 안내 페이지 없이 날것의 AWS 에러를 보여주게 된다.
+2. 오리진 페일오버(origin group)가 아예 없다는 기존 설계 한계(`docs/aws-architecture.md` §13 TODO)가 이번에 실제로 재현됨 — 대체 오리진이 없어서 정책을 원복하는 것 외에는 복구 수단이 없었음.
+
+**다음에 다시 할 때 참고할 것**:
+- 캐시 hit 경로에서는 어떻게 보이는지(계속 정상 서빙되는지) 이번엔 확인 못 함 — 직전에 방문 이력이 있는 정적 자산 경로(예: JS 번들 파일)로 재시도하면 검증 가능.
+- 개선 아이디어(이번 세션 범위 밖, 백로그용): CloudFront에 커스텀 에러 응답용 정적 "서비스 점검 중" 오브젝트를 별도 저비용 오리진(예: 같은 버킷 대신 CloudFront Functions로 인라인 HTML 반환)에 둔다면, 오리진 완전 장애 시에도 최소한의 안내는 가능할 것.
