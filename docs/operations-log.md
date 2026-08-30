@@ -1007,3 +1007,28 @@ concat 인자로 넘기는 리스트끼리는 서로 모양이 달라도 되지�
 
 적용 후 `aws cloudwatch get-dashboard`로 위젯 10개(기존 7개 + 로그 3개) 확인,
 `aws logs describe-metric-filters`로 필터 등록 확인.
+
+## 27. RDS Multi-AZ 장애조치 게임데이 (2026-08-30)
+
+**시나리오**: `docs/resilience-testing.md` §2 ① "RDS Multi-AZ 장애조치" — 프로젝트 마무리 주간을 맞아 실제로 대기 인스턴스 전환이 되는지, 앱이 수동 개입 없이 재연결하는지 처음으로 실행.
+
+**성공 기준**: 앱(slash-api)이 수동 재시작 없이 다시 응답, RDS CPU/연결 알람이 과잉 반응하지 않음.
+
+**타임라인** (UTC 기준, KST는 +9h):
+- 04:38:15 — `aws rds reboot-db-instance --db-instance-identifier slash-rds-dev --force-failover` 실행
+- 04:38:23 — RDS 이벤트: `Multi-AZ instance failover started`
+- 04:38:38 — RDS 이벤트: `DB instance restarted`
+- 04:38:57 — slash-api 로그에서 첫 이상 징후: `HikariPool-1 - Connection is not available, request timed out` → `PSQLException: The connection attempt failed` → `SocketTimeoutException: Connect timed out`, 해당 요청은 500 에러로 응답
+- 04:39:08 — RDS 이벤트: `Multi-AZ instance failover completed` (주입 시점 기준 총 53초)
+- 04:39:24 — `describe-db-instances` 상태 `available` 확인
+- 이후 — `kubectl logs -f`로 계속 관찰하려 했으나 로컬 네트워크 연결이 끊겨(`read tcp ...: connection reset by peer`) 스트림이 중간에 끊김. 재시도 없이, 대신 사후에 `kubectl get pods`로 재시작 카운트(변화 없음)와 CloudWatch 알람 상태로 정상화를 간접 확인
+
+**결과**: 성공 기준 충족. `slash-api` 파드 재시작 카운트가 failover 전후로 그대로였음(각각 3회/2회, 둘 다 이 테스트보다 훨씬 이전 시각) — 즉 커넥션 풀이 알아서 재연결했고 파드가 크래시하지 않음. `slash-rds-cpu-dev`/`slash-rds-free-storage-dev` 알람 모두 `OK` 유지. 앱이 에러를 낸 구간은 최소 04:38:57~04:39:08(약 11초) 이상으로 추정되나, 로그 스트림이 끊겨 정확한 마지막 에러 시각(=완전 정상화 시각)은 확인하지 못함.
+
+**발견한 문제**:
+1. failover 직후(04:39:24) `describe-db-instances`의 `AvailabilityZone` 필드가 여전히 기존 프라이머리 AZ(`ap-northeast-2c`)로 나와서 "failover가 실제로 안 된 건가?" 혼란이 있었음. 약 1시간 뒤 재조회하니 `AvailabilityZone=ap-northeast-2a`(대기 AZ였던 곳), `SecondaryAvailabilityZone=ap-northeast-2c`로 정상적으로 뒤바뀌어 있었음 — **RDS API의 AZ 메타데이터가 failover 완료 이벤트보다 늦게 갱신되는 지연이 있다는 뜻**. 다음에 같은 테스트를 할 때는 이벤트 로그(`describe-events`)를 우선 신뢰하고, AZ 필드로 성공 여부를 즉시 판단하지 말 것.
+2. `kubectl logs -f`를 백그라운드로 띄워 관찰하려 했으나 로컬 네트워크 문제로 스트림이 끊겨 정확한 앱 다운타임(마지막 에러~정상화)을 재지 못함 — 재현 시 `kubectl logs`보다 CloudWatch Logs Insights(Fluent Bit 수집분, `/eks/slash-eks-dev/application`)로 조회하는 게 로컬 네트워크에 안 끊기고 더 안정적일 것.
+
+**다음에 다시 할 때 참고할 것**:
+- 앱 컨테이너에 `curl`이 없어(`exec: "curl": executable file not found`) 파드 내부에서 헬스체크를 직접 찌를 수 없었음 — 외부에서 ALB 도메인(`api.dev.sbsh.cloud`)으로 찌르거나 CloudWatch Logs Insights로 확인하는 방식을 기본으로 잡을 것.
+- 로컬에서 장시간 로그를 스트리밍하기보다, 테스트 직후 CloudWatch Logs Insights 쿼리로 해당 시간대 로그를 한 번에 뽑는 방식이 더 신뢰성 있음.
