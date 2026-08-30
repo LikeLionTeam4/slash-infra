@@ -1032,3 +1032,29 @@ concat 인자로 넘기는 리스트끼리는 서로 모양이 달라도 되지�
 **다음에 다시 할 때 참고할 것**:
 - 앱 컨테이너에 `curl`이 없어(`exec: "curl": executable file not found`) 파드 내부에서 헬스체크를 직접 찌를 수 없었음 — 외부에서 ALB 도메인(`api.dev.sbsh.cloud`)으로 찌르거나 CloudWatch Logs Insights로 확인하는 방식을 기본으로 잡을 것.
 - 로컬에서 장시간 로그를 스트리밍하기보다, 테스트 직후 CloudWatch Logs Insights 쿼리로 해당 시간대 로그를 한 번에 뽑는 방식이 더 신뢰성 있음.
+
+## 28. EKS 노드 장애 복구 게임데이 (2026-08-30)
+
+**시나리오**: `docs/resilience-testing.md` §2 ① "EKS 노드 장애 복구" — 노드 하나가 죽었을 때 그 위 파드들이 다른 노드로 재스케줄되는지, `slash-api`가 PodDisruptionBudget 없이도 무중단으로 버티는지 확인.
+
+**성공 기준**: 파드가 다른 노드로 재스케줄, ALB가 그 사이 5xx를 과도하게 내지 않음.
+
+**사전 확인**: `slash-api` 2 replica가 이미 서로 다른 노드(`ip-10-8-11-126`/2c, `ip-10-8-10-29`/2a)에 떠 있었음 — 스케줄러가 우연히 분산시킨 상태(anti-affinity 규칙은 없음). 대상 노드는 `slash-eks-general-dev` 노드그룹(태그 `Project=slash` 확인) 소속 3대 중 `ip-10-8-11-126`으로 선정.
+
+**타임라인** (UTC):
+- 07:12:53 — `kubectl cordon` + `kubectl drain --ignore-daemonsets --delete-emptydir-data` 실행
+- 07:12:5x — DaemonSet 제외 5개 파드 evict: `argocd-application-controller-0`(StatefulSet, replica 1), `aws-load-balancer-controller`(replica 2 중 1개), `argocd-redis`, `external-secrets-webhook`, `slash-api-...-7mn2w`
+- 07:13:26 — 새 `slash-api` 파드가 즉시 다른 노드(`ip-10-8-11-225`)에서 `ContainerCreating` 시작(evict 직후 2초 내 스케줄링됨)
+- 07:13:27 — 새 `slash-api` 파드 `Ready`(readiness probe 통과) — drain 시작부터 총 약 34초
+- 07:13:27 — `argocd-application-controller-0`도 같은 시점 재기동 완료(약 32초)
+- 07:13:42 — `kubectl uncordon`으로 노드 원복
+
+**결과**: 성공 기준 충족. 나머지 1개 replica(`pgjfz`, 다른 노드)가 drain 내내 계속 `Running`이었기 때문에 `slash-api`는 이번 테스트에서 무중단이었음. 재스케줄까지 약 34초.
+
+**발견한 문제**:
+1. **이번엔 운이 좋았을 뿐, PodDisruptionBudget이 없다는 근본 문제는 그대로다.** 이번엔 2 replica가 서로 다른 노드에 떠 있어서 무중단이었지만, 만약 두 replica가 우연히 같은 노드에 몰려 있었다면(스케줄러가 그렇게 배치하지 못할 이유가 없음) 그 노드 하나의 장애로 `slash-api` 전체가 몇십 초간 완전히 죽었을 것. `slash-nlu`도 동일한 리스크.
+2. `argocd-application-controller`가 StatefulSet replica 1개뿐이라 이 컨트롤러가 뜬 노드가 죽으면 그 순간 ArgoCD sync 자체가 잠깐 멈춘다(이번엔 32초 만에 복구됐지만 이것도 단일 장애점).
+
+**다음에 다시 할 때 참고할 것**:
+- `slash-api`/`slash-nlu` Deployment에 `podAntiAffinity`(같은 노드에 2 replica가 몰리지 않도록) 또는 최소한 `PodDisruptionBudget`(`minAvailable: 1`) 추가를 백로그로 남길 것 — 지금 세션 범위 밖이라 코드 변경은 하지 않음.
+- 이번엔 `cordon+drain`만 했고 EC2 인스턴스 자체를 종료(`terminate-instances`)하지는 않음 — 노드그룹이 desired=3을 유지하려고 새 인스턴스를 실제로 프로비저닝하는 것까지 보려면 그 방식으로 재시도.
