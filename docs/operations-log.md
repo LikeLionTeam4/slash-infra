@@ -1082,3 +1082,25 @@ concat 인자로 넘기는 리스트끼리는 서로 모양이 달라도 되지�
 **다음에 다시 할 때 참고할 것**:
 - 캐시 hit 경로에서는 어떻게 보이는지(계속 정상 서빙되는지) 이번엔 확인 못 함 — 직전에 방문 이력이 있는 정적 자산 경로(예: JS 번들 파일)로 재시도하면 검증 가능.
 - 개선 아이디어(이번 세션 범위 밖, 백로그용): CloudFront에 커스텀 에러 응답용 정적 "서비스 점검 중" 오브젝트를 별도 저비용 오리진(예: 같은 버킷 대신 CloudFront Functions로 인라인 HTML 반환)에 둔다면, 오리진 완전 장애 시에도 최소한의 안내는 가능할 것.
+
+## 30. GitHub 장애 대응 리허설 게임데이 (2026-08-30)
+
+**시나리오**: `docs/resilience-testing.md` §2 ④ "GitHub(Actions/저장소) 전체 장애" 런북 — GitHub 자체를 끌 수는 없으니, "ArgoCD가 GitHub을 못 볼 때 수동으로 배포하고, 나중에 GitHub이 복구되면 다시 git 상태로 수렴하는" 절차가 실제로 동작하는지 리허설.
+
+**성공 기준**: (1) auto-sync를 끈 상태에서 수동 이미지 변경이 selfHeal에 의해 되돌려지지 않고 유지됨(= "GitHub 접근 불가 중 수동 배포"가 실제로 가능함을 증명), (2) auto-sync를 다시 켜면 git 추적 버전으로 자동 복구됨(= "GitHub 복구 후 정상화"가 자동으로 됨을 증명).
+
+**타임라인** (UTC):
+- 07:16:28 — `kubectl patch application slash-api -n argocd --type merge -p '{"spec":{"syncPolicy":{"automated":null}}}'`로 auto-sync 해제(GitHub 접근 불가 시뮬레이션). argocd CLI가 로컬에 없어 Application CR을 kubectl로 직접 patch하는 방식 사용 — 첫 시도(`{"syncPolicy":{}}`)는 JSON merge patch가 기존 필드를 안 지워서 실패, `automated` 필드를 명시적으로 `null`로 지정하고서야 제거됨
+- 07:17:06 — `kubectl set image deployment/slash-api slash-api=<ecr>:sha-bfc52f047376...`(하루 전 이미지 태그)로 수동 배포 — "GitHub Actions 없이 이미 ECR에 있는 이미지로 긴급 배포"를 시뮬레이션
+- 07:17:2x — 롤아웃 완료, 이미지가 수동 지정한 옛 태그로 유지됨, ArgoCD `sync.status`가 `OutOfSync`로 전환(자동 되돌림 없음)
+- 07:18:15 — `syncPolicy.automated`를 `{"prune":true,"selfHeal":true}`로 복원(GitHub 복구 시뮬레이션)
+- 07:18:22 — selfHeal이 git에 기록된 원래 태그(`sha-2f05efc3ee265550287cc0a8c77ccfdc337819bd`)로 이미지를 자동으로 되돌림, `sync.status`가 다시 `Synced` — 복원 지시 후 약 7초
+- 07:18:2x — `kubectl rollout status`로 최종 롤아웃 정상 완료, `slash-api` 2/2 Ready 확인(롤아웃 도중 잠깐 나타났던 다른 이름의 Error 파드는 확인 시점엔 이미 사라지고 없었음 — 오래된 다른 ReplicaSet 잔재로 추정, 이번 테스트와 무관해 보이지만 원인은 특정하지 못함)
+
+**결과**: 성공 기준 모두 충족. 수동 배포 유지(약 1분 유지 후 의도적으로 되돌림) + auto-sync 복원 후 약 7초 만에 git 상태로 자동 수렴.
+
+**발견한 문제**: 없음 — 런북이 문서 그대로 동작함을 확인. 다만 argocd CLI가 로컬 개발 환경에 없어서 `kubectl patch`로 우회해야 했다는 점은 실제 장애 상황에서도 동일한 제약이 될 수 있음(argocd CLI 또는 UI 접근성 확보 필요).
+
+**다음에 다시 할 때 참고할 것**:
+- `syncPolicy.automated`를 지우려면 `{"automated":null}`처럼 값 자체를 `null`로 줘야 함 — 빈 객체 `{}`로는 안 지워짐(JSON merge patch의 일반적인 동작이지만 처음엔 헷갈림).
+- argocd CLI 설치/로그인 절차를 `docs/`에 미리 남겨두면 다음 리허설이 더 빠를 것.
