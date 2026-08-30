@@ -1104,3 +1104,29 @@ concat 인자로 넘기는 리스트끼리는 서로 모양이 달라도 되지�
 **다음에 다시 할 때 참고할 것**:
 - `syncPolicy.automated`를 지우려면 `{"automated":null}`처럼 값 자체를 `null`로 줘야 함 — 빈 객체 `{}`로는 안 지워짐(JSON merge patch의 일반적인 동작이지만 처음엔 헷갈림).
 - argocd CLI 설치/로그인 절차를 `docs/`에 미리 남겨두면 다음 리허설이 더 빠를 것.
+
+## 31. Secrets 유출 대응 리허설 게임데이 (2026-08-30)
+
+**시나리오**: `docs/resilience-testing.md` §2 ② "Secrets 유출 대응(수동 로테이션)" — Valkey AUTH 토큰이 유출됐다고 가정하고, 지금 바로 무효화(재발급) → 파드가 새 값으로 재연결까지 실제로 되는지 확인. §22(RDS 관리형 비밀번호 로테이션 시 파드가 옛 비밀번호로 고착되던 문제)와 같은 근본 원인(파드 env는 생성 시점에 고정)이 Valkey에도 있는지 같이 검증.
+
+**성공 기준**: 옛 토큰은 더 이상 유효하지 않음(유출 무효화 확인), 새 토큰으로 파드가 정상 재연결(크래시 루프 없이).
+
+**타임라인** (UTC):
+- 07:20:41 — `terraform plan -replace=module.database.random_password.valkey_auth`로 영향 범위 먼저 확인(Valkey 관련 리소스 3개만 — `random_password`, `aws_secretsmanager_secret_version.valkey`, `aws_elasticache_replication_group.main`의 `auth_token`. 무관한 drift 없음)
+- 07:20:41~07:21:07 — `terraform apply -replace=...`로 새 토큰 강제 생성 → ElastiCache `auth_token` 인플레이스 수정 21초 소요 → Secrets Manager(`slash/valkey/dev`) 새 버전 반영. **ElastiCache가 별도의 2단계 ROTATE/SET 절차 없이 단일 `apply`로 즉시 반영됨** — RDS 관리형 로테이션보다 훨씬 단순
+- 07:22:12 — `kubectl annotate externalsecret slash-api-secrets force-sync=$(date +%s) --overwrite`로 강제 동기화(기본 `refreshInterval: 1h` 대기 안 함), 1초 만에 `status.refreshTime` 갱신 확인 → k8s Secret의 `VALKEY_AUTH_TOKEN` 값이 새 토큰으로 바뀜
+- 로테이션 직후 3분간 `kubectl logs`로 관찰했으나 **이미 떠 있던 파드에서 Valkey 관련 에러가 전혀 발생하지 않음** — RDS(§22)와 달리 기존 커넥션이 즉시 끊기지 않는 것으로 보임(§22와 원인은 같아도 증상이 다르게 나타남 — 아래 "발견한 문제" 참고)
+- 07:22:49 — `kubectl rollout restart deployment/slash-api` 실행(§22의 교훈에 따라 로테이션 후 무조건 재시작하는 절차를 이번에 리허설)
+- 07:22:49 이후 — 새 파드 2개 모두 `1/1 Running`, **재시작 카운트 0**으로 정상 기동(크래시 루프 재현 안 됨)
+- 리허설 마지막 — 새 토큰으로 임시 파드(`redis-cli` 이미지, `kubectl run --rm`)를 띄워 `redis-cli --tls -a <새 토큰> ping` 실행 → `PONG` 응답으로 새 토큰이 실제로 유효함을 직접 확인
+
+**결과**: 성공 기준 중 "새 토큰으로 정상 재연결"은 직접 확인(크래시 없이 `PONG`까지 검증). "옛 토큰 무효화"는 **직접 검증하지 못함** — 로테이션 전에 옛 토큰 값을 따로 저장해두지 않아 로테이션 후 A/B 테스트를 할 수 없었음. 다만 ElastiCache의 `auth_token`은 (ROTATE 단계를 안 거쳤으므로) 값 자체가 완전히 교체되는 단일 값이라 옛 토큰은 구조적으로 더 이상 유효하지 않을 것으로 판단.
+
+**발견한 문제**:
+1. **Valkey AUTH 로테이션은 RDS 관리형 비밀번호 로테이션(§22)과 증상이 다르다.** RDS는 로테이션 즉시 기존 커넥션/재연결 시도가 옛 비밀번호로 실패해 CrashLoopBackOff까지 갔지만, Valkey는 로테이션 후 3분 넘게 기존 파드에서 에러가 전혀 안 났다 — 아마 Lettuce(Redis 클라이언트)가 이미 맺은 커넥션을 계속 재사용하고 있어서였을 것. 즉 "로테이션했는데 아무 에러도 안 보인다"는 상태가 오히려 **더 위험할 수 있다** — 유출된 옛 세션이 계속 살아있을 가능성을 의미하기 때문. 진짜 유출 대응이라면 로테이션 직후 반드시 `rollout restart`까지 실행해서 기존 커넥션을 강제로 끊어야 한다는 게 이번에 확인한 핵심 교훈.
+2. 로테이션 전에 옛 토큰 값을 기록해두지 않아 "무효화 확인"을 직접 못 했음 — 재현 가치가 있는 실수라 기록.
+
+**다음에 다시 할 때 참고할 것**:
+- 이번 절차(terraform apply -replace → force-sync → rollout restart → 새 토큰 ping 검증)를 그대로 `docs/resilience-testing.md`의 표준 절차로 굳혀도 될 만큼 깔끔하게 됐음.
+- 다음엔 로테이션 직전에 `aws secretsmanager get-secret-value`로 옛 토큰을 임시로 저장해뒀다가, 로테이션 후 그 옛 토큰으로 `redis-cli ping`을 시도해 `NOAUTH`/`WRONGPASS`로 거절되는 것까지 확인할 것.
+- Reloader 같은 자동 재시작 도구는 여전히 미도입 상태 — 이번에도 `rollout restart`를 수동으로 실행해야 했음. §22와 함께 여전히 남은 숙제.
