@@ -1130,3 +1130,33 @@ concat 인자로 넘기는 리스트끼리는 서로 모양이 달라도 되지�
 - 이번 절차(terraform apply -replace → force-sync → rollout restart → 새 토큰 ping 검증)를 그대로 `docs/resilience-testing.md`의 표준 절차로 굳혀도 될 만큼 깔끔하게 됐음.
 - 다음엔 로테이션 직전에 `aws secretsmanager get-secret-value`로 옛 토큰을 임시로 저장해뒀다가, 로테이션 후 그 옛 토큰으로 `redis-cli ping`을 시도해 `NOAUTH`/`WRONGPASS`로 거절되는 것까지 확인할 것.
 - Reloader 같은 자동 재시작 도구는 여전히 미도입 상태 — 이번에도 `rollout restart`를 수동으로 실행해야 했음. §22와 함께 여전히 남은 숙제.
+
+## 32. 부하테스트 + Container Insights 게임데이 (2026-08-31)
+
+**시나리오**: `docs/resilience-testing.md` §2 ① "부하테스트 / HPA 오토스케일링 검증" — `slash-api`에 점증 부하를 걸어 HPA(CPU 70%, min2/max4)가 실제로 스케일아웃하는지, ALB 5xx가 발생하지 않는지 확인. 관측 채널 중 하나로 Container Insights(`amazon-cloudwatch-observability` addon)를 이번에 한해 임시 설치.
+
+**성공 기준**: HPA가 CPU 70% 기준으로 실제 스케일아웃, ALB 5xx 발생 안 함, 부하 종료 후 스케일다운까지 정상 복귀.
+
+**사전 확인**: 인증 없이 접근 가능한 엔드포인트는 `/actuator/health/readiness`, `/actuator/health/liveness`뿐(그 외 API는 `AUTH_REQUIRED` 401) — 이 저장소(slash-infra)에는 앱 소스가 없어 인증 우회/테스트 계정 발급이 불가능했으므로, 부하는 헬스체크 엔드포인트에만 걸었다는 한계를 미리 기록해둔다. 로컬에 `k6`/`hey` 미설치, `ab`(Apache Bench)는 설치돼 있어 이를 사용.
+
+**타임라인** (UTC):
+- 01:31:57 — 사전 상태 확인: HPA `cpu: 1%/70%`, replica 2/2, ALB/타겟그룹 식별, Container Insights addon은 전날(08-30) 이미 설치돼 `ACTIVE` 상태였음을 재확인
+- 01:32:06 — `kubectl get hpa -w`, `kubectl top pods`(10초 간격) 백그라운드 관측 시작
+- 01:32:36 — `ab -n 500000 -c 300 -t 180 https://api.dev.sbsh.cloud/actuator/health/readiness` 실행(동시성 300, 최대 180초)
+- 01:33:01~01:34:29 — HPA 관측값이 `cpu: 4%/70%` → **`69%/70%`** → `59%/70%` → **`76%/70%`** → `41%/70%`로 급등 후 하강. 같은 구간 `kubectl top pods` 값도 파드당 4m→137~201m(요청값 250m 대비)으로 동반 상승해 교차 확인됨
+- 01:35:37 — `ab` 종료: 총 30,529 요청 완료, **실패 0건**, 평균 169.56 req/s, 최대 응답시간 5.8s(동시성 300 하에서의 커넥션 대기 포함)
+- 01:35:37 이후 — HPA `cpu`가 20%대까지 하강하는 동안에도 **replica는 2/2에서 전혀 변하지 않음**(스케일아웃 자체가 발생하지 않음)
+- 사후 조회 — ALB(`k8s-default-slashapi-da025791f3`) CloudWatch 지표: `HTTPCode_Target_5XX_Count` 전 구간 **0**, `RequestCount`는 01:33분 구간 10,883/분까지 상승, `TargetResponseTime` 평균은 부하 최대 구간에도 약 21~30ms로 낮게 유지
+
+**결과**: 부분 충족. "ALB 5xx 없음"은 충족(0건). 하지만 **"CPU 70% 기준 스케일아웃"은 CPU가 76%까지 두 차례 임계값을 초과했음에도 실제로는 트리거되지 않아 미충족** — 이번 게임데이의 핵심 발견.
+
+**발견한 문제**:
+1. **HPA가 CPU 70% 초과를 감지했음에도 스케일아웃하지 않음.** 임계값을 넘긴 구간이 약 90초(HPA 동기화 주기 15초 기준 6회 정도)로 상대적으로 짧았고, `ab`가 정확히 180초 후 종료되며 부하가 급격히 빠졌다 — HPA의 스케일업 결정과 실제 파드 스케줄링 사이의 지연(수십 초) 안에 부하가 이미 꺾여버렸을 가능성이 높다. **다음 부하테스트에서는 CPU 70%+ 상태를 최소 3~5분 이상 유지**해서 스케일아웃이 실제로 트리거되는지 별도로 재검증 필요 — 이번 결과만으로 "우리 시스템의 오토스케일링이 작동하지 않는다"고 단정할 수는 없지만, "작동한다"고 확인도 못 했다는 뜻이므로 그대로 열어둔다.
+2. **Container Insights addon이 `ACTIVE` 상태였지만 지표가 CloudWatch에 하나도 올라가지 않고 있었다.** `cloudwatch-agent` 파드 로그에서 `AccessDeniedException: ... slash-eks-node-dev ... not authorized to perform: logs:PutLogEvents`를 확인 — 노드 IAM 역할에 `CloudWatchAgentServerPolicy`(또는 최소 `logs:PutLogEvents`)가 없어 addon 설치만으로는 동작하지 않음. 같은 계정의 다른 팀 클러스터(`lion-team3-*`)는 정상적으로 지표가 올라오고 있어 계정/네임스페이스 문제가 아니라 우리 노드 역할만의 IAM 갭임을 확인. 이 부하테스트 자체는 `kubectl top`(metrics-server) + HPA 컨트롤러 + ALB CloudWatch 지표로 대체 관측해 완료했다. 상세 내용은 이슈 [#47](https://github.com/LikeLionTeam4/slash-infra/issues/47)에 코멘트로 남김 — 옵션 1(Container Insights)을 실제 채택할 경우 이 IAM 갭을 먼저 메워야 함.
+3. 인증 없이 접근 가능한 엔드포인트가 헬스체크뿐이라 실제 비즈니스 트래픽 패턴(로그인 필요 API)에 대한 부하테스트는 이번에 하지 못했다는 한계.
+
+**다음에 다시 할 때 참고할 것**:
+- 부하 지속시간을 5분 이상으로 늘려 실제 스케일아웃 트리거 여부를 재검증할 것 — 이번 결과는 "미확인"이지 "실패"가 아님을 §5 인덱스에도 그대로 반영.
+- Container Insights를 다시 켜기 전에 노드 역할에 `CloudWatchAgentServerPolicy`부터 붙일 것(이슈 #47).
+- 다음 부하테스트는 인증이 필요한 실제 API 엔드포인트까지 포함하려면 테스트 전용 계정/토큰 발급 절차를 먼저 준비할 것.
+- 테스트 종료 후 `aws eks delete-addon --cluster-name slash-eks-dev --addon-name amazon-cloudwatch-observability` 실행, `DELETING` 상태 확인함(완전 삭제까지는 시간이 더 걸릴 수 있어 다음 세션에서 최종 상태 재확인 권장).
