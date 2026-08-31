@@ -93,7 +93,7 @@
 | --- | --- | --- | --- |
 | 2026-08-30 | RDS Multi-AZ 장애조치 | 성공 (재연결 자동, 알람 정상) | operations-log.md §27 |
 | 2026-08-30 | EKS 노드 장애 복구 | 성공 (다운타임 없음, PDB 부재 리스크는 발견) | operations-log.md §28 |
-| 2026-08-30 | CloudFront/S3 오리진 차단 | 성공 (36초 내 원복, 오리진 페일오버 부재 재확인) | operations-log.md §29 |
+| 2026-08-30 | CloudFront/S3 오리진 차단 | 성공 (36초 내 원복, 오리진 페일오버 부재 재확인) — 캐시 hit 미검증 항목은 §38에서 완결 | operations-log.md §29 |
 | 2026-08-30 | GitHub 장애 대응 리허설 | 성공 (수동 배포 유지, selfHeal 복구 7초) | operations-log.md §30 |
 | 2026-08-30 | Secrets 유출 대응 리허설 (Valkey) | 부분 성공 (새 토큰 검증됨, 옛 토큰 무효화는 미검증) — §37에서 정정/완결 | operations-log.md §31 |
 | 2026-08-31 | 부하테스트 + Container Insights | 부분 충족 (5xx 0건, Container Insights IAM 갭 발견 → 이슈 #47) | operations-log.md §32 |
@@ -102,3 +102,4 @@
 | 2026-08-31 | 부하테스트 3차 (k6, 실제 부하) | 성공 — HPA 2→4 스케일아웃 실증, max replica로도 부족 확인, §22 문제 실제 재발 발견 → 이슈 #80 | operations-log.md §35 |
 | 2026-08-31 | Reloader 도입 검증 | 성공 — Secret 변경 후 수 초 내 자동 롤링 재시작 확인(§22/§35 근본 해결). **push 전 상태, ArgoCD auto-sync 임시 해제 중** | operations-log.md §36 |
 | 2026-08-31 | Secrets 유출 대응 재검증 (옛 토큰 무효화) | 성공 — 옛 토큰 거절 확인, §31 오류(ROTATE 기본값) 발견·수정(SET으로 코드 반영), Reloader 실전 검증까지 겸함 | operations-log.md §37 |
+| 2026-08-31 | CloudFront/S3 오리진 차단 재검증 (캐시 hit) | 완료 — 캐시 hit 경로도 오리진 403 차단에서 살아남지 못함을 확인(stale 서빙 미적용) | operations-log.md §38 |
