@@ -99,3 +99,4 @@
 | 2026-08-31 | 부하테스트 + Container Insights | 부분 충족 (5xx 0건, Container Insights IAM 갭 발견 → 이슈 #47) | operations-log.md §32 |
 | 2026-08-31 | 부하테스트 재검증 (장시간) | 성공 — HPA 정상 확인, 첫 시도의 스케일아웃 미발생은 부하 강도 부족 때문으로 결론 | operations-log.md §33 |
 | 2026-08-31 | Container Insights IAM 갭 수정 검증 | 성공 — 정책 부착만으로 지표 정상 수집 확인 → 이슈 #47 | operations-log.md §34 |
+| 2026-08-31 | 부하테스트 3차 (k6, 실제 부하) | 성공 — HPA 2→4 스케일아웃 실증, max replica로도 부족 확인, §22 문제 실제 재발 발견 → 이슈 #80 | operations-log.md §35 |

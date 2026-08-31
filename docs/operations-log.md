@@ -1206,3 +1206,36 @@ concat 인자로 넘기는 리스트끼리는 서로 모양이 달라도 되지�
 **다음에 다시 할 때 참고할 것**:
 - 이슈 #47에서 "Container Insights를 채택한다"로 결정되면, `modules/eks`(또는 노드그룹 IAM 모듈)에 `CloudWatchAgentServerPolicy` 부착을 Terraform으로 코드화하고 addon도 `aws eks create-addon` CLI 대신 Terraform(`aws_eks_addon`)으로 관리할 것 — 지금은 검증 목적의 임시 CLI 조작이었음.
 - 검증 완료 후 원상복구: addon은 에이전트가 `delete-addon`으로 제거 가능하지만, 방금 붙인 IAM 정책 detach는 이번에도 "보안 설정 변경"이라 에이전트가 직접 할 수 없음 — 사용자가 `aws iam detach-role-policy --role-name slash-eks-node-dev --policy-arn arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy`를 직접 실행해야 완전히 원상복구됨(§8 마무리 체크리스트에 반영).
+
+## 35. 부하테스트 3차 — 진짜 부하 도구(k6)로 스케일아웃 실증 + §22 문제 실제 재발 발견 (2026-08-31)
+
+**시나리오**: §33에서 "동시성 300짜리 `ab`로는 CPU가 30%도 안 올라간다"고 결론 냈는데, 원인을 더 파보니 **`ab`(macOS 기본 번들, 오래된 단일 프로세스 빌드) 자체가 병목**이었다 — 동시성을 300→900으로 올려도 처리량이 그대로(~200 req/s)였고 Connect 시간만 더 늘어남(1.2s→2.8s), 이는 서버가 아니라 로컬 클라이언트가 그만큼의 동시 연결을 실제로 못 만들어내고 있다는 뜻. `brew install k6`로 제대로 된 부하 도구를 설치해 재시도.
+
+**성공 기준**: 실제로 CPU 70%를 넘기는 부하를 만들어서 HPA가 스케일아웃하는지 최종 확인.
+
+**타임라인** (UTC):
+- 02:20~02:24 — `ab -c 900`으로 한 번 더 시도했으나 위 이유로 실패(처리량 그대로, Connect 시간만 폭증) → `ab` 자체의 한계로 결론, `brew install k6` 설치
+- 02:25:48 — HPA/`kubectl top` 백그라운드 관측 시작
+- 02:25:48~02:31:20 — k6 ramping-vus 시나리오 실행(0→200→500→800 VU, 총 5분30초): **총 1,347,475 요청, 4083 req/s 평균, 실패율 0.00%**
+- 02:27~02:28 — HPA `cpu`가 **277%/70%**까지 치솟음(요청값 250m 기준 파드당 약 690m) → 거의 즉시 **4/4(max)로 스케일아웃**
+- 02:28~02:31 — 4개 파드로 스케일아웃한 뒤에도 CPU가 **240~373%/70%**로 유지 — max replica(4)로도 이 정도 부하를 못 받아냄
+- ALB 지표(같은 구간): `RequestCount` 최대 분당 417,888건(약 6,965 req/s), `HTTPCode_Target_5XX_Count` **총 1건**(사실상 무시할 수준), `TargetResponseTime` 평균 0.08~0.2초·최대 3.9~6.4초(포화 구간 지연)
+- 02:31:20 — 부하 종료. 그런데 곧이어 **파드별 CPU가 극단적으로 불균등**하다는 걸 발견 — 새로 뜬 파드 2개(`5vwr9`, `rc6g7`)는 최대 1.8~1.9 코어까지 사용 중인데 기존 파드 2개(`gvq86`, `jpx5v`)는 계속 idle(7~30m)
+- 02:32~02:33 — `aws elbv2 describe-target-health` 확인 → 기존 파드 2개가 **`unhealthy`(`Target.ResponseCodeMismatch`)**로 ALB 라우팅에서 빠져있었음. `kubectl get events`에서 같은 두 파드에 `Liveness probe failed: context deadline exceeded` 이벤트 확인(단, k8s 자체 `failureThreshold: 3` 문턱은 못 넘어서 컨테이너 재시작은 발생하지 않음)
+- 02:33:33 — 부하 종료 후 **2분 넘게 지났는데도 회복 안 됨** — 임시 `curl` 파드로 두 파드 IP(8080)에 직접 요청했더니 **완전히 무응답**(TCP는 연결되나 3초 타임아웃까지 응답 없음), 반면 새 파드는 7ms에 정상 응답
+- 02:34 — 두 파드의 최근 로그 확인 → **`FATAL: password authentication failed for user "slash_admin"`**, `HikariPool-1 - Connection is not available` 대량 발생 확인. `aws secretsmanager describe-secret`으로 RDS 관리형 마스터 비밀번호가 **당일 02:08:17 UTC에 자동 로테이션**된 사실 확인 — §22(2026-08-24)에서 발견했던 것과 **완전히 같은 원인의 재발**
+- 02:35:21 — `kubectl rollout restart deployment/slash-api` 실행(원인 규명 후 즉시 복구 조치)
+- 02:35:21 이후 — 롤아웃 정상 완료, 새 파드 4개 전부 `1/1 Running`, ALB 타겟 4개 전부 `healthy`로 복구 확인
+
+**결과**: 성공 기준 완전 충족 — **HPA는 실제로 스케일아웃한다**(2→4, max까지). 다만 max replica(4)로도 이번 부하(약 5000~7000 req/s)를 못 받아내 CPU가 계속 250~370%대에 머물렀다는 것도 함께 확인됨(§5 인덱스에도 "성공 + 중요 발견"으로 반영).
+
+**발견한 문제** (이번 회차가 가장 소득이 컸다):
+1. **max replica(4)가 실제 트래픽 스파이크를 감당하기엔 부족할 수 있다.** 이번 정도 부하(k6 800 VU)에서도 스케일아웃 후 CPU가 여전히 250%+ 로 남았다 — `maxReplicas`를 늘리거나(노드그룹 `max=4`도 같이 늘려야 함) 파드당 `resources.requests.cpu`를 재산정할 필요가 있다는 신호.
+2. **§22의 "RDS 관리형 비밀번호 로테이션 시 파드 고착" 문제가 실제로, 우연히, 오늘 다시 발생했다.** 이번엔 §22 때(로테이션 직후 우연히 걸린 파드가 CrashLoopBackOff로 눈에 띄게 실패)와 달리, **평소엔 기존 커넥션 풀을 재사용해 멀쩡해 보이다가 부하로 풀이 소진되는 순간에만 터지는 훨씬 은밀한 형태**였다. 게다가 k8s의 liveness probe(`failureThreshold: 3`)로는 감지가 안 돼 **자동 재시작도 안 되고, `kubectl get pods`로는 계속 정상(1/1 Running)으로 보임** — ALB 타겟 헬스만 보고 있지 않았다면 놓쳤을 문제. 이슈 [#80](https://github.com/LikeLionTeam4/slash-infra/issues/80)으로 등록, Reloader 도입을 정식 제안함.
+3. ALB 타겟 그룹 알고리즘은 `round_robin`이라 "일부러" 불균형하게 보낸 게 아니라, **헬스체크에 떨어진 타겟을 정상적으로 라우팅에서 제외한 것**뿐이었다 — 처음엔 알고리즘 문제로 의심했으나 `describe-target-group-attributes`로 확인 후 배제.
+
+**다음에 다시 할 때 참고할 것**:
+- 로컬 부하테스트는 `ab`가 아니라 `k6`(또는 `hey`, `wrk` 등 진짜 동시성을 만들어내는 도구)를 쓸 것 — `ab`는 동시성을 아무리 올려도 처리량이 안 늘어나는 걸 이번에 실측으로 확인함.
+- **RDS 관리형 비밀번호 로테이션 스케줄(`NextRotationDate`)을 사전에 확인하고, 로테이션 시점 근처(±1시간, `refreshInterval` 기준)에는 부하테스트를 피하거나, 반대로 일부러 그 타이밍에 맞춰 이 문제를 재현/검증하는 것도 유효한 전략.**
+- `maxReplicas`를 늘리는 결정을 한다면 EKS 노드그룹 `max`(현재 4)도 함께 늘려야 실제로 스케줄링 가능 — HPA 상한만 올리는 건 의미 없음.
+- 이번에도 원인 파악 후 조치(`rollout restart`)까지 바로 실행 — §31에서 얻은 "로테이션 이후엔 무조건 재시작"이라는 교훈이 이번엔 사후 대응이 아니라 사전 지식으로 바로 적용된 사례.
