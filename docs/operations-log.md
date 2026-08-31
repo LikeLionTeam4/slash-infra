@@ -1239,3 +1239,26 @@ concat 인자로 넘기는 리스트끼리는 서로 모양이 달라도 되지�
 - **RDS 관리형 비밀번호 로테이션 스케줄(`NextRotationDate`)을 사전에 확인하고, 로테이션 시점 근처(±1시간, `refreshInterval` 기준)에는 부하테스트를 피하거나, 반대로 일부러 그 타이밍에 맞춰 이 문제를 재현/검증하는 것도 유효한 전략.**
 - `maxReplicas`를 늘리는 결정을 한다면 EKS 노드그룹 `max`(현재 4)도 함께 늘려야 실제로 스케줄링 가능 — HPA 상한만 올리는 건 의미 없음.
 - 이번에도 원인 파악 후 조치(`rollout restart`)까지 바로 실행 — §31에서 얻은 "로테이션 이후엔 무조건 재시작"이라는 교훈이 이번엔 사후 대응이 아니라 사전 지식으로 바로 적용된 사례.
+
+## 36. Reloader 도입 검증 (2026-08-31)
+
+**시나리오**: §35에서 실제로 재발한 §22 문제(RDS 비밀번호 로테이션 시 파드 고착)에 대한 근본 대책으로 이슈 [#80](https://github.com/LikeLionTeam4/slash-infra/issues/80)에서 제안한 Reloader(stakater/reloader)를 실제로 도입하고, Secret이 바뀌면 정말로 자동 롤링 재시작이 되는지 검증. `helm/slash-api/templates/deployment.yaml`에 `secret.reloader.stakater.com/reload: "slash-api-secrets"` annotation을 추가하는 코드 변경은 커밋했지만 **아직 push 전**이라(로컬 11개 커밋이 origin 대비 앞서있는 상태), ArgoCD가 GitHub에서 pull하는 구조상 이 annotation은 아직 실제 클러스터엔 반영되지 않은 상태였다 — push하기 전에 먼저 검증부터 하기로 함(사용자 지시).
+
+**성공 기준**: Secret 내용이 바뀌면 Reloader가 감지해서 `slash-api` Deployment가 자동으로 롤링 재시작되는지 확인.
+
+**타임라인** (UTC):
+- 02:47:59~02:48:05 — `helm repo add stakater` → `helm install reloader stakater/reloader -n kube-system`로 컨트롤러 설치(다른 클러스터 내부 애드온과 동일하게 GitOps 대상 아님, `reloader/README.md`로 문서화)
+- 02:50:49 — push 전에 검증하기 위해 §30과 같은 방법으로 `slash-api` ArgoCD Application의 `syncPolicy.automated`를 임시로 해제(§30 GitHub 리허설 때와 동일한 patch 방식)
+- 이어서 `kubectl annotate deployment slash-api secret.reloader.stakater.com/reload=slash-api-secrets`로 커밋해둔 chart 변경을 라이브 Deployment에 수동으로 미리 반영(annotation만 추가라 이 자체로는 롤아웃 안 일어남 — revision 57 그대로 유지 확인)
+- 03:11:22 — 실제 DB_USERNAME/DB_PASSWORD/VALKEY_AUTH_TOKEN은 건드리지 않고, `slash-api-secrets`에 아무 의미 없는 테스트 키(`RELOADER_TEST`)를 `kubectl patch secret --type merge`로 추가(보안 설정 변경으로 분류돼 에이전트가 직접 실행 못 해 사용자가 직접 실행)
+- 03:11:22 (같은 시각, 로그 2건) — `reloader-reloader` 파드 로그에 `Changes detected in 'slash-api-secrets' of type 'SECRET' in namespace 'default'; updated 'slash-api' of type 'Deployment'` 즉시 기록 — 아마 ESO가 매니지드 시크릿에 없는 키를 거의 즉시 원래 3개 키로 되돌리면서 두 번째 변경도 함께 감지된 것으로 추정
+- 이어서 — `kubectl rollout history`에 새 revision 58, 59 생성 확인, `kubectl rollout status` 정상 완료(`kubectl.kubernetes.io/restartedAt` annotation이 pod template에 자동으로 붙은 것으로 트리거 방식 확인), 새 파드 전부 `1/1 Running`
+
+**결과**: 성공 기준 완전 충족. Secret 값이 바뀌면 **사람 개입 없이, 1시간 `refreshInterval`을 기다릴 필요도 없이, 수 초 안에** 자동 롤링 재시작된다는 걸 실측으로 확인. §22/§35의 근본 원인(파드가 옛 Secret에 영구 고착)이 이제 구조적으로 해결됨.
+
+**발견한 문제**: 없음 — 의도한 대로 정확히 동작함. 다만 테스트 키를 추가하자마자 ESO가 되돌리면서 변경이 두 번 감지된 것으로 보이는데, 정확한 인과관계까지는 확인 못 했음(중요하지 않아 더 파지 않음).
+
+**다음에 다시 할 때 참고할 것**:
+- 검증은 실제 값(DB_PASSWORD 등)을 건드리지 않고 무해한 테스트 키 하나만 추가하는 방식으로 진행해 기능 리스크 없이 확인 가능했다 — 이후에도 이 패턴을 재사용할 것.
+- `kubectl patch secret`은 "보안 설정 변경"으로 분류돼 에이전트가 직접 실행할 수 없음 — Secret 관련 검증은 항상 사용자 실행이 필요하다는 점을 미리 안내할 것.
+- **아직 push 전** — `helm/slash-api/templates/deployment.yaml`의 annotation과 `reloader/README.md`가 origin에 반영돼야 ArgoCD가 selfHeal을 켠 상태에서도 이 annotation을 유지한다. push 전까지는 `slash-api` Application의 `syncPolicy.automated`를 해제된 상태로 둬야 함(§8류 마무리 체크리스트에 반영 필요) — push 완료 후 `{"automated":{"prune":true,"selfHeal":true}}`로 복원할 것.
