@@ -91,4 +91,9 @@
 
 | 날짜 | 테스트 | 결과 | 상세 기록 |
 | --- | --- | --- | --- |
-| (아직 없음) | | | |
+| 2026-08-30 | RDS Multi-AZ 장애조치 | 성공 (재연결 자동, 알람 정상) | operations-log.md §27 |
+| 2026-08-30 | EKS 노드 장애 복구 | 성공 (다운타임 없음, PDB 부재 리스크는 발견) | operations-log.md §28 |
+| 2026-08-30 | CloudFront/S3 오리진 차단 | 성공 (36초 내 원복, 오리진 페일오버 부재 재확인) | operations-log.md §29 |
+| 2026-08-30 | GitHub 장애 대응 리허설 | 성공 (수동 배포 유지, selfHeal 복구 7초) | operations-log.md §30 |
+| 2026-08-30 | Secrets 유출 대응 리허설 (Valkey) | 부분 성공 (새 토큰 검증됨, 옛 토큰 무효화는 미검증) | operations-log.md §31 |
+| 2026-08-31 | 부하테스트 + Container Insights | 부분 충족 (5xx 0건, 스케일아웃은 미확인/재검증 필요, Container Insights IAM 갭 발견 → 이슈 #47) | operations-log.md §32 |
