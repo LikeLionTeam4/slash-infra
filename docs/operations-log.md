@@ -1007,3 +1007,315 @@ concat 인자로 넘기는 리스트끼리는 서로 모양이 달라도 되지�
 
 적용 후 `aws cloudwatch get-dashboard`로 위젯 10개(기존 7개 + 로그 3개) 확인,
 `aws logs describe-metric-filters`로 필터 등록 확인.
+
+## 27. RDS Multi-AZ 장애조치 게임데이 (2026-08-30)
+
+**시나리오**: `docs/resilience-testing.md` §2 ① "RDS Multi-AZ 장애조치" — 프로젝트 마무리 주간을 맞아 실제로 대기 인스턴스 전환이 되는지, 앱이 수동 개입 없이 재연결하는지 처음으로 실행.
+
+**성공 기준**: 앱(slash-api)이 수동 재시작 없이 다시 응답, RDS CPU/연결 알람이 과잉 반응하지 않음.
+
+**타임라인** (UTC 기준, KST는 +9h):
+- 04:38:15 — `aws rds reboot-db-instance --db-instance-identifier slash-rds-dev --force-failover` 실행
+- 04:38:23 — RDS 이벤트: `Multi-AZ instance failover started`
+- 04:38:38 — RDS 이벤트: `DB instance restarted`
+- 04:38:57 — slash-api 로그에서 첫 이상 징후: `HikariPool-1 - Connection is not available, request timed out` → `PSQLException: The connection attempt failed` → `SocketTimeoutException: Connect timed out`, 해당 요청은 500 에러로 응답
+- 04:39:08 — RDS 이벤트: `Multi-AZ instance failover completed` (주입 시점 기준 총 53초)
+- 04:39:24 — `describe-db-instances` 상태 `available` 확인
+- 이후 — `kubectl logs -f`로 계속 관찰하려 했으나 로컬 네트워크 연결이 끊겨(`read tcp ...: connection reset by peer`) 스트림이 중간에 끊김. 재시도 없이, 대신 사후에 `kubectl get pods`로 재시작 카운트(변화 없음)와 CloudWatch 알람 상태로 정상화를 간접 확인
+
+**결과**: 성공 기준 충족. `slash-api` 파드 재시작 카운트가 failover 전후로 그대로였음(각각 3회/2회, 둘 다 이 테스트보다 훨씬 이전 시각) — 즉 커넥션 풀이 알아서 재연결했고 파드가 크래시하지 않음. `slash-rds-cpu-dev`/`slash-rds-free-storage-dev` 알람 모두 `OK` 유지. 앱이 에러를 낸 구간은 최소 04:38:57~04:39:08(약 11초) 이상으로 추정되나, 로그 스트림이 끊겨 정확한 마지막 에러 시각(=완전 정상화 시각)은 확인하지 못함.
+
+**발견한 문제**:
+1. failover 직후(04:39:24) `describe-db-instances`의 `AvailabilityZone` 필드가 여전히 기존 프라이머리 AZ(`ap-northeast-2c`)로 나와서 "failover가 실제로 안 된 건가?" 혼란이 있었음. 약 1시간 뒤 재조회하니 `AvailabilityZone=ap-northeast-2a`(대기 AZ였던 곳), `SecondaryAvailabilityZone=ap-northeast-2c`로 정상적으로 뒤바뀌어 있었음 — **RDS API의 AZ 메타데이터가 failover 완료 이벤트보다 늦게 갱신되는 지연이 있다는 뜻**. 다음에 같은 테스트를 할 때는 이벤트 로그(`describe-events`)를 우선 신뢰하고, AZ 필드로 성공 여부를 즉시 판단하지 말 것.
+2. `kubectl logs -f`를 백그라운드로 띄워 관찰하려 했으나 로컬 네트워크 문제로 스트림이 끊겨 정확한 앱 다운타임(마지막 에러~정상화)을 재지 못함 — 재현 시 `kubectl logs`보다 CloudWatch Logs Insights(Fluent Bit 수집분, `/eks/slash-eks-dev/application`)로 조회하는 게 로컬 네트워크에 안 끊기고 더 안정적일 것.
+
+**다음에 다시 할 때 참고할 것**:
+- 앱 컨테이너에 `curl`이 없어(`exec: "curl": executable file not found`) 파드 내부에서 헬스체크를 직접 찌를 수 없었음 — 외부에서 ALB 도메인(`api.dev.sbsh.cloud`)으로 찌르거나 CloudWatch Logs Insights로 확인하는 방식을 기본으로 잡을 것.
+- 로컬에서 장시간 로그를 스트리밍하기보다, 테스트 직후 CloudWatch Logs Insights 쿼리로 해당 시간대 로그를 한 번에 뽑는 방식이 더 신뢰성 있음.
+
+## 28. EKS 노드 장애 복구 게임데이 (2026-08-30)
+
+**시나리오**: `docs/resilience-testing.md` §2 ① "EKS 노드 장애 복구" — 노드 하나가 죽었을 때 그 위 파드들이 다른 노드로 재스케줄되는지, `slash-api`가 PodDisruptionBudget 없이도 무중단으로 버티는지 확인.
+
+**성공 기준**: 파드가 다른 노드로 재스케줄, ALB가 그 사이 5xx를 과도하게 내지 않음.
+
+**사전 확인**: `slash-api` 2 replica가 이미 서로 다른 노드(`ip-10-8-11-126`/2c, `ip-10-8-10-29`/2a)에 떠 있었음 — 스케줄러가 우연히 분산시킨 상태(anti-affinity 규칙은 없음). 대상 노드는 `slash-eks-general-dev` 노드그룹(태그 `Project=slash` 확인) 소속 3대 중 `ip-10-8-11-126`으로 선정.
+
+**타임라인** (UTC):
+- 07:12:53 — `kubectl cordon` + `kubectl drain --ignore-daemonsets --delete-emptydir-data` 실행
+- 07:12:5x — DaemonSet 제외 5개 파드 evict: `argocd-application-controller-0`(StatefulSet, replica 1), `aws-load-balancer-controller`(replica 2 중 1개), `argocd-redis`, `external-secrets-webhook`, `slash-api-...-7mn2w`
+- 07:13:26 — 새 `slash-api` 파드가 즉시 다른 노드(`ip-10-8-11-225`)에서 `ContainerCreating` 시작(evict 직후 2초 내 스케줄링됨)
+- 07:13:27 — 새 `slash-api` 파드 `Ready`(readiness probe 통과) — drain 시작부터 총 약 34초
+- 07:13:27 — `argocd-application-controller-0`도 같은 시점 재기동 완료(약 32초)
+- 07:13:42 — `kubectl uncordon`으로 노드 원복
+
+**결과**: 성공 기준 충족. 나머지 1개 replica(`pgjfz`, 다른 노드)가 drain 내내 계속 `Running`이었기 때문에 `slash-api`는 이번 테스트에서 무중단이었음. 재스케줄까지 약 34초.
+
+**발견한 문제**:
+1. **이번엔 운이 좋았을 뿐, PodDisruptionBudget이 없다는 근본 문제는 그대로다.** 이번엔 2 replica가 서로 다른 노드에 떠 있어서 무중단이었지만, 만약 두 replica가 우연히 같은 노드에 몰려 있었다면(스케줄러가 그렇게 배치하지 못할 이유가 없음) 그 노드 하나의 장애로 `slash-api` 전체가 몇십 초간 완전히 죽었을 것. `slash-nlu`도 동일한 리스크.
+2. `argocd-application-controller`가 StatefulSet replica 1개뿐이라 이 컨트롤러가 뜬 노드가 죽으면 그 순간 ArgoCD sync 자체가 잠깐 멈춘다(이번엔 32초 만에 복구됐지만 이것도 단일 장애점).
+
+**다음에 다시 할 때 참고할 것**:
+- `slash-api`/`slash-nlu` Deployment에 `podAntiAffinity`(같은 노드에 2 replica가 몰리지 않도록) 또는 최소한 `PodDisruptionBudget`(`minAvailable: 1`) 추가를 백로그로 남길 것 — 지금 세션 범위 밖이라 코드 변경은 하지 않음.
+- 이번엔 `cordon+drain`만 했고 EC2 인스턴스 자체를 종료(`terminate-instances`)하지는 않음 — 노드그룹이 desired=3을 유지하려고 새 인스턴스를 실제로 프로비저닝하는 것까지 보려면 그 방식으로 재시도.
+
+## 29. CloudFront/S3 오리진 차단 게임데이 (2026-08-30)
+
+**시나리오**: `docs/resilience-testing.md` §2 ③ "CloudFront/S3 오리진 차단" — 프론트엔드 오리진(S3, `slash-web-dev-061039804626`)에 CloudFront가 접근 못 하게 되면 사용자에게 어떻게 보이는지, 원복 즉시 정상화되는지 확인.
+
+**성공 기준**: 정책 원복 즉시 정상화. (사전 정의했던 "캐시 hit는 계속 정상 응답" 기준은 이번 요청 경로가 마침 캐시 miss였어서 검증하지 못함 — 아래 발견한 문제 참고.)
+
+**사전 확인**: 버킷 태그 `Project=slash` 확인(같은 계정에 `book-eating-lion-*` 등 다른 팀 버킷이 섞여 있어 이름으로 먼저 필터링 후 태그로 재확인). 기존 버킷 정책을 로컬에 백업.
+
+**타임라인** (UTC):
+- 07:14:36 — `aws s3api put-bucket-policy`로 CloudFront OAC principal 대상 `Deny` 문 추가(기존 `Allow` 문 아래에 추가, Deny가 우선 적용)
+- 07:14:4x — Chrome(claude-in-chrome)으로 `https://dev.sbsh.cloud/` 접속 → S3 원본 `AccessDenied` XML 그대로 노출됨(CloudFront의 403 → `/index.html` 200 커스텀 에러 매핑도 함께 실패 — 그 매핑이 조회하려는 `/index.html` 자체도 같은 오리진이라 마찬가지로 거부됨)
+- 07:15:12 — `aws s3api put-bucket-policy`로 백업해둔 원래 정책(Deny 문 제거)으로 원복
+- 07:15:2x — Chrome으로 재접속 → 정상적으로 `/login` 페이지 렌더링 확인
+
+**결과**: 성공 기준 충족 — 정책 원복 후 즉시(수 초 내) 정상화, 별도 무효화(invalidation)나 대기 없이 복구됨. 차단 지속 시간 총 36초.
+
+**발견한 문제**:
+1. **오리진이 완전히 막히면 SPA의 404/403→`/index.html` 커스텀 에러 매핑 자체가 무력화된다.** 원래 이 매핑은 "이 파일은 없지만 사이트는 정상"인 상황(SPA 라우팅)을 위한 건데, "오리진 자체가 안 열리는" 상황에서는 매핑이 가리키는 `/index.html`도 못 가져와서 결국 S3의 raw `AccessDenied` XML이 사용자에게 그대로 노출됨. 즉 지금 구조에서 오리진 완전 장애는 아무 안내 페이지 없이 날것의 AWS 에러를 보여주게 된다.
+2. 오리진 페일오버(origin group)가 아예 없다는 기존 설계 한계(`docs/aws-architecture.md` §13 TODO)가 이번에 실제로 재현됨 — 대체 오리진이 없어서 정책을 원복하는 것 외에는 복구 수단이 없었음.
+
+**다음에 다시 할 때 참고할 것**:
+- 캐시 hit 경로에서는 어떻게 보이는지(계속 정상 서빙되는지) 이번엔 확인 못 함 — 직전에 방문 이력이 있는 정적 자산 경로(예: JS 번들 파일)로 재시도하면 검증 가능.
+- 개선 아이디어(이번 세션 범위 밖, 백로그용): CloudFront에 커스텀 에러 응답용 정적 "서비스 점검 중" 오브젝트를 별도 저비용 오리진(예: 같은 버킷 대신 CloudFront Functions로 인라인 HTML 반환)에 둔다면, 오리진 완전 장애 시에도 최소한의 안내는 가능할 것.
+
+## 30. GitHub 장애 대응 리허설 게임데이 (2026-08-30)
+
+**시나리오**: `docs/resilience-testing.md` §2 ④ "GitHub(Actions/저장소) 전체 장애" 런북 — GitHub 자체를 끌 수는 없으니, "ArgoCD가 GitHub을 못 볼 때 수동으로 배포하고, 나중에 GitHub이 복구되면 다시 git 상태로 수렴하는" 절차가 실제로 동작하는지 리허설.
+
+**성공 기준**: (1) auto-sync를 끈 상태에서 수동 이미지 변경이 selfHeal에 의해 되돌려지지 않고 유지됨(= "GitHub 접근 불가 중 수동 배포"가 실제로 가능함을 증명), (2) auto-sync를 다시 켜면 git 추적 버전으로 자동 복구됨(= "GitHub 복구 후 정상화"가 자동으로 됨을 증명).
+
+**타임라인** (UTC):
+- 07:16:28 — `kubectl patch application slash-api -n argocd --type merge -p '{"spec":{"syncPolicy":{"automated":null}}}'`로 auto-sync 해제(GitHub 접근 불가 시뮬레이션). argocd CLI가 로컬에 없어 Application CR을 kubectl로 직접 patch하는 방식 사용 — 첫 시도(`{"syncPolicy":{}}`)는 JSON merge patch가 기존 필드를 안 지워서 실패, `automated` 필드를 명시적으로 `null`로 지정하고서야 제거됨
+- 07:17:06 — `kubectl set image deployment/slash-api slash-api=<ecr>:sha-bfc52f047376...`(하루 전 이미지 태그)로 수동 배포 — "GitHub Actions 없이 이미 ECR에 있는 이미지로 긴급 배포"를 시뮬레이션
+- 07:17:2x — 롤아웃 완료, 이미지가 수동 지정한 옛 태그로 유지됨, ArgoCD `sync.status`가 `OutOfSync`로 전환(자동 되돌림 없음)
+- 07:18:15 — `syncPolicy.automated`를 `{"prune":true,"selfHeal":true}`로 복원(GitHub 복구 시뮬레이션)
+- 07:18:22 — selfHeal이 git에 기록된 원래 태그(`sha-2f05efc3ee265550287cc0a8c77ccfdc337819bd`)로 이미지를 자동으로 되돌림, `sync.status`가 다시 `Synced` — 복원 지시 후 약 7초
+- 07:18:2x — `kubectl rollout status`로 최종 롤아웃 정상 완료, `slash-api` 2/2 Ready 확인(롤아웃 도중 잠깐 나타났던 다른 이름의 Error 파드는 확인 시점엔 이미 사라지고 없었음 — 오래된 다른 ReplicaSet 잔재로 추정, 이번 테스트와 무관해 보이지만 원인은 특정하지 못함)
+
+**결과**: 성공 기준 모두 충족. 수동 배포 유지(약 1분 유지 후 의도적으로 되돌림) + auto-sync 복원 후 약 7초 만에 git 상태로 자동 수렴.
+
+**발견한 문제**: 없음 — 런북이 문서 그대로 동작함을 확인. 다만 argocd CLI가 로컬 개발 환경에 없어서 `kubectl patch`로 우회해야 했다는 점은 실제 장애 상황에서도 동일한 제약이 될 수 있음(argocd CLI 또는 UI 접근성 확보 필요).
+
+**다음에 다시 할 때 참고할 것**:
+- `syncPolicy.automated`를 지우려면 `{"automated":null}`처럼 값 자체를 `null`로 줘야 함 — 빈 객체 `{}`로는 안 지워짐(JSON merge patch의 일반적인 동작이지만 처음엔 헷갈림).
+- argocd CLI 설치/로그인 절차를 `docs/`에 미리 남겨두면 다음 리허설이 더 빠를 것.
+
+## 31. Secrets 유출 대응 리허설 게임데이 (2026-08-30)
+
+**시나리오**: `docs/resilience-testing.md` §2 ② "Secrets 유출 대응(수동 로테이션)" — Valkey AUTH 토큰이 유출됐다고 가정하고, 지금 바로 무효화(재발급) → 파드가 새 값으로 재연결까지 실제로 되는지 확인. §22(RDS 관리형 비밀번호 로테이션 시 파드가 옛 비밀번호로 고착되던 문제)와 같은 근본 원인(파드 env는 생성 시점에 고정)이 Valkey에도 있는지 같이 검증.
+
+**성공 기준**: 옛 토큰은 더 이상 유효하지 않음(유출 무효화 확인), 새 토큰으로 파드가 정상 재연결(크래시 루프 없이).
+
+**타임라인** (UTC):
+- 07:20:41 — `terraform plan -replace=module.database.random_password.valkey_auth`로 영향 범위 먼저 확인(Valkey 관련 리소스 3개만 — `random_password`, `aws_secretsmanager_secret_version.valkey`, `aws_elasticache_replication_group.main`의 `auth_token`. 무관한 drift 없음)
+- 07:20:41~07:21:07 — `terraform apply -replace=...`로 새 토큰 강제 생성 → ElastiCache `auth_token` 인플레이스 수정 21초 소요 → Secrets Manager(`slash/valkey/dev`) 새 버전 반영. **ElastiCache가 별도의 2단계 ROTATE/SET 절차 없이 단일 `apply`로 즉시 반영됨** — RDS 관리형 로테이션보다 훨씬 단순
+- 07:22:12 — `kubectl annotate externalsecret slash-api-secrets force-sync=$(date +%s) --overwrite`로 강제 동기화(기본 `refreshInterval: 1h` 대기 안 함), 1초 만에 `status.refreshTime` 갱신 확인 → k8s Secret의 `VALKEY_AUTH_TOKEN` 값이 새 토큰으로 바뀜
+- 로테이션 직후 3분간 `kubectl logs`로 관찰했으나 **이미 떠 있던 파드에서 Valkey 관련 에러가 전혀 발생하지 않음** — RDS(§22)와 달리 기존 커넥션이 즉시 끊기지 않는 것으로 보임(§22와 원인은 같아도 증상이 다르게 나타남 — 아래 "발견한 문제" 참고)
+- 07:22:49 — `kubectl rollout restart deployment/slash-api` 실행(§22의 교훈에 따라 로테이션 후 무조건 재시작하는 절차를 이번에 리허설)
+- 07:22:49 이후 — 새 파드 2개 모두 `1/1 Running`, **재시작 카운트 0**으로 정상 기동(크래시 루프 재현 안 됨)
+- 리허설 마지막 — 새 토큰으로 임시 파드(`redis-cli` 이미지, `kubectl run --rm`)를 띄워 `redis-cli --tls -a <새 토큰> ping` 실행 → `PONG` 응답으로 새 토큰이 실제로 유효함을 직접 확인
+
+**결과**: 성공 기준 중 "새 토큰으로 정상 재연결"은 직접 확인(크래시 없이 `PONG`까지 검증). "옛 토큰 무효화"는 **직접 검증하지 못함** — 로테이션 전에 옛 토큰 값을 따로 저장해두지 않아 로테이션 후 A/B 테스트를 할 수 없었음. 다만 ElastiCache의 `auth_token`은 (ROTATE 단계를 안 거쳤으므로) 값 자체가 완전히 교체되는 단일 값이라 옛 토큰은 구조적으로 더 이상 유효하지 않을 것으로 판단.
+
+> **정정 (§37, 2026-08-31)**: 위 마지막 문장은 **틀렸다.** 실제로 재검증해보니 `auth_token_update_strategy` 기본값이 `ROTATE`라서 옛 토큰이 새 토큰과 함께 당분간 계속 유효했다 — "ROTATE 단계를 안 거쳤으므로"라는 추측 자체가 잘못된 전제였음. §37에서 `auth_token_update_strategy = "SET"`으로 코드에 명시해 실제로 즉시 무효화되도록 고쳤다. 아래 §31 내용을 볼 때 이 정정을 함께 참고할 것.
+
+**발견한 문제**:
+1. **Valkey AUTH 로테이션은 RDS 관리형 비밀번호 로테이션(§22)과 증상이 다르다.** RDS는 로테이션 즉시 기존 커넥션/재연결 시도가 옛 비밀번호로 실패해 CrashLoopBackOff까지 갔지만, Valkey는 로테이션 후 3분 넘게 기존 파드에서 에러가 전혀 안 났다 — 아마 Lettuce(Redis 클라이언트)가 이미 맺은 커넥션을 계속 재사용하고 있어서였을 것. 즉 "로테이션했는데 아무 에러도 안 보인다"는 상태가 오히려 **더 위험할 수 있다** — 유출된 옛 세션이 계속 살아있을 가능성을 의미하기 때문. 진짜 유출 대응이라면 로테이션 직후 반드시 `rollout restart`까지 실행해서 기존 커넥션을 강제로 끊어야 한다는 게 이번에 확인한 핵심 교훈.
+2. 로테이션 전에 옛 토큰 값을 기록해두지 않아 "무효화 확인"을 직접 못 했음 — 재현 가치가 있는 실수라 기록.
+
+**다음에 다시 할 때 참고할 것**:
+- 이번 절차(terraform apply -replace → force-sync → rollout restart → 새 토큰 ping 검증)를 그대로 `docs/resilience-testing.md`의 표준 절차로 굳혀도 될 만큼 깔끔하게 됐음.
+- 다음엔 로테이션 직전에 `aws secretsmanager get-secret-value`로 옛 토큰을 임시로 저장해뒀다가, 로테이션 후 그 옛 토큰으로 `redis-cli ping`을 시도해 `NOAUTH`/`WRONGPASS`로 거절되는 것까지 확인할 것.
+- Reloader 같은 자동 재시작 도구는 여전히 미도입 상태 — 이번에도 `rollout restart`를 수동으로 실행해야 했음. §22와 함께 여전히 남은 숙제.
+
+## 32. 부하테스트 + Container Insights 게임데이 (2026-08-31)
+
+**시나리오**: `docs/resilience-testing.md` §2 ① "부하테스트 / HPA 오토스케일링 검증" — `slash-api`에 점증 부하를 걸어 HPA(CPU 70%, min2/max4)가 실제로 스케일아웃하는지, ALB 5xx가 발생하지 않는지 확인. 관측 채널 중 하나로 Container Insights(`amazon-cloudwatch-observability` addon)를 이번에 한해 임시 설치.
+
+**성공 기준**: HPA가 CPU 70% 기준으로 실제 스케일아웃, ALB 5xx 발생 안 함, 부하 종료 후 스케일다운까지 정상 복귀.
+
+**사전 확인**: 인증 없이 접근 가능한 엔드포인트는 `/actuator/health/readiness`, `/actuator/health/liveness`뿐(그 외 API는 `AUTH_REQUIRED` 401) — 이 저장소(slash-infra)에는 앱 소스가 없어 인증 우회/테스트 계정 발급이 불가능했으므로, 부하는 헬스체크 엔드포인트에만 걸었다는 한계를 미리 기록해둔다. 로컬에 `k6`/`hey` 미설치, `ab`(Apache Bench)는 설치돼 있어 이를 사용.
+
+**타임라인** (UTC):
+- 01:31:57 — 사전 상태 확인: HPA `cpu: 1%/70%`, replica 2/2, ALB/타겟그룹 식별, Container Insights addon은 전날(08-30) 이미 설치돼 `ACTIVE` 상태였음을 재확인
+- 01:32:06 — `kubectl get hpa -w`, `kubectl top pods`(10초 간격) 백그라운드 관측 시작
+- 01:32:36 — `ab -n 500000 -c 300 -t 180 https://api.dev.sbsh.cloud/actuator/health/readiness` 실행(동시성 300, 최대 180초)
+- 01:33:01~01:34:29 — HPA 관측값이 `cpu: 4%/70%` → **`69%/70%`** → `59%/70%` → **`76%/70%`** → `41%/70%`로 급등 후 하강. 같은 구간 `kubectl top pods` 값도 파드당 4m→137~201m(요청값 250m 대비)으로 동반 상승해 교차 확인됨
+- 01:35:37 — `ab` 종료: 총 30,529 요청 완료, **실패 0건**, 평균 169.56 req/s, 최대 응답시간 5.8s(동시성 300 하에서의 커넥션 대기 포함)
+- 01:35:37 이후 — HPA `cpu`가 20%대까지 하강하는 동안에도 **replica는 2/2에서 전혀 변하지 않음**(스케일아웃 자체가 발생하지 않음)
+- 사후 조회 — ALB(`k8s-default-slashapi-da025791f3`) CloudWatch 지표: `HTTPCode_Target_5XX_Count` 전 구간 **0**, `RequestCount`는 01:33분 구간 10,883/분까지 상승, `TargetResponseTime` 평균은 부하 최대 구간에도 약 21~30ms로 낮게 유지
+
+**결과**: 부분 충족. "ALB 5xx 없음"은 충족(0건). 하지만 **"CPU 70% 기준 스케일아웃"은 CPU가 76%까지 두 차례 임계값을 초과했음에도 실제로는 트리거되지 않아 미충족** — 이번 게임데이의 핵심 발견.
+
+**발견한 문제**:
+1. **HPA가 CPU 70% 초과를 감지했음에도 스케일아웃하지 않음.** 임계값을 넘긴 구간이 약 90초(HPA 동기화 주기 15초 기준 6회 정도)로 상대적으로 짧았고, `ab`가 정확히 180초 후 종료되며 부하가 급격히 빠졌다 — HPA의 스케일업 결정과 실제 파드 스케줄링 사이의 지연(수십 초) 안에 부하가 이미 꺾여버렸을 가능성이 높다. **다음 부하테스트에서는 CPU 70%+ 상태를 최소 3~5분 이상 유지**해서 스케일아웃이 실제로 트리거되는지 별도로 재검증 필요 — 이번 결과만으로 "우리 시스템의 오토스케일링이 작동하지 않는다"고 단정할 수는 없지만, "작동한다"고 확인도 못 했다는 뜻이므로 그대로 열어둔다.
+2. **Container Insights addon이 `ACTIVE` 상태였지만 지표가 CloudWatch에 하나도 올라가지 않고 있었다.** `cloudwatch-agent` 파드 로그에서 `AccessDeniedException: ... slash-eks-node-dev ... not authorized to perform: logs:PutLogEvents`를 확인 — 노드 IAM 역할에 `CloudWatchAgentServerPolicy`(또는 최소 `logs:PutLogEvents`)가 없어 addon 설치만으로는 동작하지 않음. 같은 계정의 다른 팀 클러스터(`lion-team3-*`)는 정상적으로 지표가 올라오고 있어 계정/네임스페이스 문제가 아니라 우리 노드 역할만의 IAM 갭임을 확인. 이 부하테스트 자체는 `kubectl top`(metrics-server) + HPA 컨트롤러 + ALB CloudWatch 지표로 대체 관측해 완료했다. 상세 내용은 이슈 [#47](https://github.com/LikeLionTeam4/slash-infra/issues/47)에 코멘트로 남김 — 옵션 1(Container Insights)을 실제 채택할 경우 이 IAM 갭을 먼저 메워야 함.
+3. 인증 없이 접근 가능한 엔드포인트가 헬스체크뿐이라 실제 비즈니스 트래픽 패턴(로그인 필요 API)에 대한 부하테스트는 이번에 하지 못했다는 한계.
+
+**다음에 다시 할 때 참고할 것**:
+- 부하 지속시간을 5분 이상으로 늘려 실제 스케일아웃 트리거 여부를 재검증할 것 — 이번 결과는 "미확인"이지 "실패"가 아님을 §5 인덱스에도 그대로 반영.
+- Container Insights를 다시 켜기 전에 노드 역할에 `CloudWatchAgentServerPolicy`부터 붙일 것(이슈 #47).
+- 다음 부하테스트는 인증이 필요한 실제 API 엔드포인트까지 포함하려면 테스트 전용 계정/토큰 발급 절차를 먼저 준비할 것.
+- 테스트 종료 후 `aws eks delete-addon --cluster-name slash-eks-dev --addon-name amazon-cloudwatch-observability` 실행, `DELETING` 상태 확인함(완전 삭제까지는 시간이 더 걸릴 수 있어 다음 세션에서 최종 상태 재확인 권장).
+
+## 33. 부하테스트 재검증 — 장시간 부하 (2026-08-31)
+
+**시나리오**: §32에서 미확인으로 남긴 "HPA가 CPU 70% 기준으로 실제 스케일아웃하는지"를 재검증. §32는 부하가 90초 만에 꺼지면서 HPA 판단 타이밍을 놓쳤을 가능성이 있었으므로, 이번엔 부하 지속시간을 최대 7분(420초)까지 늘려서 재시도. 인프라 변경 없이(Container Insights 재설치 안 함) `kubectl top`/HPA/ALB 지표만으로 관측.
+
+**성공 기준**: §32와 동일 — CPU 70% 이상이 충분히 지속되면 HPA가 replica를 늘리는지 확인(스케일아웃이 안 일어난다면 그 이유가 "임계값 미도달"인지 "HPA 자체 문제"인지 구분).
+
+**타임라인** (UTC):
+- 01:51:01 — 사전 상태 확인: HPA `cpu: 1%/70%`, replica 2/2. `kubectl get hpa -w`(HPA), `kubectl top pods` 15초 간격(CPU) 백그라운드 관측 시작
+- 01:51:06 — `ab -n 1000000 -c 300 -t 420 https://api.dev.sbsh.cloud/actuator/health/readiness` 실행(최대 7분, 최대 100만 요청 조건)
+- 01:51:33~01:55:14 — `kubectl top pods` 관측: 파드당 CPU가 초반 3~4m → 약 30초 만에 48~74m으로 상승한 뒤 **그 수준(파드당 57~75m, 요청값 250m 대비 약 23~30%)에서 안정적으로 유지**됨. HPA `cpu` 값도 이 구간 내내 **24~29%/70%**로 안정 — 70%에 전혀 도달하지 못함
+- 01:55:09 — `ab`가 **예상과 다르게 조기 종료**: 지정한 `-t 420`(420초)/`-n 1000000`에 한참 못 미친 **242초 경과 / 50,000 요청 완료** 시점에 중단됨. 실패 요청은 0건으로 집계됐지만 `Connect` 시간 통계에 `min -793ms`라는 물리적으로 불가능한 음수 값이 나타남 — 로컬 macOS 클라이언트가 테스트 도중 절전/타임점프 등을 겪어 `ab`의 경과시간 계산이 깨졌을 가능성이 높음(서버 쪽 문제 아님). `ulimit -n` 확인 결과 1,048,576으로 파일 디스크립터 고갈은 원인에서 배제됨
+- 01:55:30 — 관측 종료, HPA `cpu: 1%/70%`로 원상태 복귀, replica는 시종일관 2/2로 변화 없음
+
+**결과**: **HPA는 정상 동작한 것으로 결론.** §32에서 관측했던 69~76% 스파이크는 재현되지 않았고, 같은 동시성(300)의 지속 부하에서 실제 정상상태 CPU는 24~29%로 안정적이었다 — 즉 §32의 스파이크는 사실상 순간적인 워밍업(TLS 핸드셔킹/커넥션 풀 초기화 등) 아티팩트였을 가능성이 높고, **지속적인(steady-state) 부하는 애초에 70% 임계값 근처에도 못 미쳤다.** 따라서 "HPA가 스케일아웃을 안 한 것"은 HPA의 결함이 아니라 **이 테스트 조건(동시성 300, 헬스체크 엔드포인트)이 실제로 스케일아웃을 유발할 만한 부하가 아니었기 때문**이라는 게 이번에 얻은 결론이다. §32의 "미확인"을 "HPA 정상, 이번 부하 강도가 부족했을 뿐"로 갱신한다.
+
+**발견한 문제**:
+1. 로컬 macOS에서 실행한 장시간(4분 이상) `ab` 세션이 중간에 클라이언트 자체의 이상(음수 커넥션 시간, 지정 시간의 절반만 채우고 조기 종료)을 보였다 — 노트북 절전/화면잠금 등 로컬 환경 요인으로 추정, 서버 측 이상 징후는 전혀 없었음(HPA/CPU 관측치는 끊김 없이 정상적으로 계속 수집됨). **장시간 부하테스트는 로컬 노트북이 아니라 별도 EC2/러너에서 실행해야 신뢰할 수 있다**는 게 이번에 얻은 교훈.
+2. 동시성 300 × 헬스체크 엔드포인트로는 CPU 요청값(250m)의 30%도 못 채운다 — 실제로 70%까지 밀어붙이려면 동시성을 훨씬 높이거나(1000+), 헬스체크보다 무거운 실제 비즈니스 엔드포인트가 필요함. 이 저장소(slash-infra)엔 앱 소스가 없어 더 무거운 엔드포인트를 새로 만들 수는 없으므로, 순수 인프라 관점에서는 "HPA 설정 자체는 정상"이라는 확인까지가 이번 범위의 한계.
+
+**다음에 다시 할 때 참고할 것**:
+- HPA 스케일아웃을 실제로 트리거해보고 싶다면 동시성을 1000 이상으로 올리거나, 인증 우회용 테스트 계정으로 실제 비즈니스 엔드포인트에 부하를 걸 것.
+- 4분을 넘는 부하테스트는 로컬 노트북 대신 EC2(예: 임시 `t3.micro`)나 CI 러너에서 실행해 클라이언트 측 이상 변수를 없앨 것.
+- §32의 "부분 충족" 결론은 이번 §33으로 "HPA 정상, 부하 강도 부족"으로 업데이트됨 — §5 인덱스도 함께 갱신.
+
+## 34. Container Insights IAM 갭 수정 검증 (2026-08-31)
+
+**시나리오**: §32에서 발견한 문제 — `amazon-cloudwatch-observability` addon이 `ACTIVE`인데도 노드 IAM 역할(`slash-eks-node-dev`)에 `logs:PutLogEvents` 권한이 없어 지표가 전혀 안 올라가던 것 — 을 이슈 [#47](https://github.com/LikeLionTeam4/slash-infra/issues/47)에 기록만 해두고 넘어갔는데, 실제로 정책을 붙이면 해결되는지 검증. IAM 정책 부착/해제는 "보안 설정 변경"에 해당해 에이전트가 직접 실행할 수 없어 사용자가 직접 명령을 실행함.
+
+**성공 기준**: `CloudWatchAgentServerPolicy`를 노드 역할에 붙이고 addon을 재설치하면, `cloudwatch-agent` 파드 로그에 `AccessDeniedException`이 재발하지 않고 CloudWatch `ContainerInsights` 네임스페이스에 실제 지표(`pod_cpu_utilization` 등)가 올라오는지 확인.
+
+**타임라인** (UTC):
+- 01:59:xx — 사용자가 직접 `aws iam attach-role-policy --role-name slash-eks-node-dev --policy-arn arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy` 실행, 부착 확인
+- 01:59:57 — `aws eks create-addon --cluster-name slash-eks-dev --addon-name amazon-cloudwatch-observability` 재설치
+- 02:00:37 — addon `ACTIVE`, `cloudwatch-agent`/`fluent-bit`/`amazon-cloudwatch-observability-controller-manager` 파드 전부 새로 기동, `1/1 Running`
+- 02:02:xx — `kubectl logs`로 새 `cloudwatch-agent` 파드 확인 — **`AccessDeniedException` 재발 없음**
+- 02:00:37~02:02:xx — `aws cloudwatch list-metrics --namespace ContainerInsights --dimensions Name=ClusterName,Value=slash-eks-dev`를 20초 간격으로 폴링(Monitor 사용), **약 2분(6회 폴링) 만에 26개 지표 등장** — §32 때는 94분이 지나도 0개였던 것과 대조적
+- 02:02:00 — `get-metric-statistics`로 `slash-api` 파드의 `pod_cpu_utilization` 실측값 확인: 평균 0.139%, 최대 0.153% — 같은 시각 idle 상태의 `kubectl top`(파드당 3~5m/2000m 노드 용량 기준)과 정확히 일치
+
+**결과**: 성공 기준 완전 충족. IAM 갭이 유일한 원인이었고, 정책 하나만 붙이면 addon이 완전히 정상 동작함을 실측으로 확인.
+
+**발견한 문제**: 없음 — 가설이 그대로 맞았음. `logs:PutLogEvents` 권한 부재가 유일한 원인이었고, 다른 숨은 문제는 없었다.
+
+**다음에 다시 할 때 참고할 것**:
+- 이슈 #47에서 "Container Insights를 채택한다"로 결정되면, `modules/eks`(또는 노드그룹 IAM 모듈)에 `CloudWatchAgentServerPolicy` 부착을 Terraform으로 코드화하고 addon도 `aws eks create-addon` CLI 대신 Terraform(`aws_eks_addon`)으로 관리할 것 — 지금은 검증 목적의 임시 CLI 조작이었음.
+- 검증 완료 후 원상복구: addon은 에이전트가 `delete-addon`으로 제거 가능하지만, 방금 붙인 IAM 정책 detach는 이번에도 "보안 설정 변경"이라 에이전트가 직접 할 수 없음 — 사용자가 `aws iam detach-role-policy --role-name slash-eks-node-dev --policy-arn arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy`를 직접 실행해야 완전히 원상복구됨(§8 마무리 체크리스트에 반영).
+
+## 35. 부하테스트 3차 — 진짜 부하 도구(k6)로 스케일아웃 실증 + §22 문제 실제 재발 발견 (2026-08-31)
+
+**시나리오**: §33에서 "동시성 300짜리 `ab`로는 CPU가 30%도 안 올라간다"고 결론 냈는데, 원인을 더 파보니 **`ab`(macOS 기본 번들, 오래된 단일 프로세스 빌드) 자체가 병목**이었다 — 동시성을 300→900으로 올려도 처리량이 그대로(~200 req/s)였고 Connect 시간만 더 늘어남(1.2s→2.8s), 이는 서버가 아니라 로컬 클라이언트가 그만큼의 동시 연결을 실제로 못 만들어내고 있다는 뜻. `brew install k6`로 제대로 된 부하 도구를 설치해 재시도.
+
+**성공 기준**: 실제로 CPU 70%를 넘기는 부하를 만들어서 HPA가 스케일아웃하는지 최종 확인.
+
+**타임라인** (UTC):
+- 02:20~02:24 — `ab -c 900`으로 한 번 더 시도했으나 위 이유로 실패(처리량 그대로, Connect 시간만 폭증) → `ab` 자체의 한계로 결론, `brew install k6` 설치
+- 02:25:48 — HPA/`kubectl top` 백그라운드 관측 시작
+- 02:25:48~02:31:20 — k6 ramping-vus 시나리오 실행(0→200→500→800 VU, 총 5분30초): **총 1,347,475 요청, 4083 req/s 평균, 실패율 0.00%**
+- 02:27~02:28 — HPA `cpu`가 **277%/70%**까지 치솟음(요청값 250m 기준 파드당 약 690m) → 거의 즉시 **4/4(max)로 스케일아웃**
+- 02:28~02:31 — 4개 파드로 스케일아웃한 뒤에도 CPU가 **240~373%/70%**로 유지 — max replica(4)로도 이 정도 부하를 못 받아냄
+- ALB 지표(같은 구간): `RequestCount` 최대 분당 417,888건(약 6,965 req/s), `HTTPCode_Target_5XX_Count` **총 1건**(사실상 무시할 수준), `TargetResponseTime` 평균 0.08~0.2초·최대 3.9~6.4초(포화 구간 지연)
+- 02:31:20 — 부하 종료. 그런데 곧이어 **파드별 CPU가 극단적으로 불균등**하다는 걸 발견 — 새로 뜬 파드 2개(`5vwr9`, `rc6g7`)는 최대 1.8~1.9 코어까지 사용 중인데 기존 파드 2개(`gvq86`, `jpx5v`)는 계속 idle(7~30m)
+- 02:32~02:33 — `aws elbv2 describe-target-health` 확인 → 기존 파드 2개가 **`unhealthy`(`Target.ResponseCodeMismatch`)**로 ALB 라우팅에서 빠져있었음. `kubectl get events`에서 같은 두 파드에 `Liveness probe failed: context deadline exceeded` 이벤트 확인(단, k8s 자체 `failureThreshold: 3` 문턱은 못 넘어서 컨테이너 재시작은 발생하지 않음)
+- 02:33:33 — 부하 종료 후 **2분 넘게 지났는데도 회복 안 됨** — 임시 `curl` 파드로 두 파드 IP(8080)에 직접 요청했더니 **완전히 무응답**(TCP는 연결되나 3초 타임아웃까지 응답 없음), 반면 새 파드는 7ms에 정상 응답
+- 02:34 — 두 파드의 최근 로그 확인 → **`FATAL: password authentication failed for user "slash_admin"`**, `HikariPool-1 - Connection is not available` 대량 발생 확인. `aws secretsmanager describe-secret`으로 RDS 관리형 마스터 비밀번호가 **당일 02:08:17 UTC에 자동 로테이션**된 사실 확인 — §22(2026-08-24)에서 발견했던 것과 **완전히 같은 원인의 재발**
+- 02:35:21 — `kubectl rollout restart deployment/slash-api` 실행(원인 규명 후 즉시 복구 조치)
+- 02:35:21 이후 — 롤아웃 정상 완료, 새 파드 4개 전부 `1/1 Running`, ALB 타겟 4개 전부 `healthy`로 복구 확인
+
+**결과**: 성공 기준 완전 충족 — **HPA는 실제로 스케일아웃한다**(2→4, max까지). 다만 max replica(4)로도 이번 부하(약 5000~7000 req/s)를 못 받아내 CPU가 계속 250~370%대에 머물렀다는 것도 함께 확인됨(§5 인덱스에도 "성공 + 중요 발견"으로 반영).
+
+**발견한 문제** (이번 회차가 가장 소득이 컸다):
+1. **max replica(4)가 실제 트래픽 스파이크를 감당하기엔 부족할 수 있다.** 이번 정도 부하(k6 800 VU)에서도 스케일아웃 후 CPU가 여전히 250%+ 로 남았다 — `maxReplicas`를 늘리거나(노드그룹 `max=4`도 같이 늘려야 함) 파드당 `resources.requests.cpu`를 재산정할 필요가 있다는 신호.
+2. **§22의 "RDS 관리형 비밀번호 로테이션 시 파드 고착" 문제가 실제로, 우연히, 오늘 다시 발생했다.** 이번엔 §22 때(로테이션 직후 우연히 걸린 파드가 CrashLoopBackOff로 눈에 띄게 실패)와 달리, **평소엔 기존 커넥션 풀을 재사용해 멀쩡해 보이다가 부하로 풀이 소진되는 순간에만 터지는 훨씬 은밀한 형태**였다. 게다가 k8s의 liveness probe(`failureThreshold: 3`)로는 감지가 안 돼 **자동 재시작도 안 되고, `kubectl get pods`로는 계속 정상(1/1 Running)으로 보임** — ALB 타겟 헬스만 보고 있지 않았다면 놓쳤을 문제. 이슈 [#80](https://github.com/LikeLionTeam4/slash-infra/issues/80)으로 등록, Reloader 도입을 정식 제안함.
+3. ALB 타겟 그룹 알고리즘은 `round_robin`이라 "일부러" 불균형하게 보낸 게 아니라, **헬스체크에 떨어진 타겟을 정상적으로 라우팅에서 제외한 것**뿐이었다 — 처음엔 알고리즘 문제로 의심했으나 `describe-target-group-attributes`로 확인 후 배제.
+
+**다음에 다시 할 때 참고할 것**:
+- 로컬 부하테스트는 `ab`가 아니라 `k6`(또는 `hey`, `wrk` 등 진짜 동시성을 만들어내는 도구)를 쓸 것 — `ab`는 동시성을 아무리 올려도 처리량이 안 늘어나는 걸 이번에 실측으로 확인함.
+- **RDS 관리형 비밀번호 로테이션 스케줄(`NextRotationDate`)을 사전에 확인하고, 로테이션 시점 근처(±1시간, `refreshInterval` 기준)에는 부하테스트를 피하거나, 반대로 일부러 그 타이밍에 맞춰 이 문제를 재현/검증하는 것도 유효한 전략.**
+- `maxReplicas`를 늘리는 결정을 한다면 EKS 노드그룹 `max`(현재 4)도 함께 늘려야 실제로 스케줄링 가능 — HPA 상한만 올리는 건 의미 없음.
+- 이번에도 원인 파악 후 조치(`rollout restart`)까지 바로 실행 — §31에서 얻은 "로테이션 이후엔 무조건 재시작"이라는 교훈이 이번엔 사후 대응이 아니라 사전 지식으로 바로 적용된 사례.
+
+## 36. Reloader 도입 검증 (2026-08-31)
+
+**시나리오**: §35에서 실제로 재발한 §22 문제(RDS 비밀번호 로테이션 시 파드 고착)에 대한 근본 대책으로 이슈 [#80](https://github.com/LikeLionTeam4/slash-infra/issues/80)에서 제안한 Reloader(stakater/reloader)를 실제로 도입하고, Secret이 바뀌면 정말로 자동 롤링 재시작이 되는지 검증. `helm/slash-api/templates/deployment.yaml`에 `secret.reloader.stakater.com/reload: "slash-api-secrets"` annotation을 추가하는 코드 변경은 커밋했지만 **아직 push 전**이라(로컬 11개 커밋이 origin 대비 앞서있는 상태), ArgoCD가 GitHub에서 pull하는 구조상 이 annotation은 아직 실제 클러스터엔 반영되지 않은 상태였다 — push하기 전에 먼저 검증부터 하기로 함(사용자 지시).
+
+**성공 기준**: Secret 내용이 바뀌면 Reloader가 감지해서 `slash-api` Deployment가 자동으로 롤링 재시작되는지 확인.
+
+**타임라인** (UTC):
+- 02:47:59~02:48:05 — `helm repo add stakater` → `helm install reloader stakater/reloader -n kube-system`로 컨트롤러 설치(다른 클러스터 내부 애드온과 동일하게 GitOps 대상 아님, `reloader/README.md`로 문서화)
+- 02:50:49 — push 전에 검증하기 위해 §30과 같은 방법으로 `slash-api` ArgoCD Application의 `syncPolicy.automated`를 임시로 해제(§30 GitHub 리허설 때와 동일한 patch 방식)
+- 이어서 `kubectl annotate deployment slash-api secret.reloader.stakater.com/reload=slash-api-secrets`로 커밋해둔 chart 변경을 라이브 Deployment에 수동으로 미리 반영(annotation만 추가라 이 자체로는 롤아웃 안 일어남 — revision 57 그대로 유지 확인)
+- 03:11:22 — 실제 DB_USERNAME/DB_PASSWORD/VALKEY_AUTH_TOKEN은 건드리지 않고, `slash-api-secrets`에 아무 의미 없는 테스트 키(`RELOADER_TEST`)를 `kubectl patch secret --type merge`로 추가(보안 설정 변경으로 분류돼 에이전트가 직접 실행 못 해 사용자가 직접 실행)
+- 03:11:22 (같은 시각, 로그 2건) — `reloader-reloader` 파드 로그에 `Changes detected in 'slash-api-secrets' of type 'SECRET' in namespace 'default'; updated 'slash-api' of type 'Deployment'` 즉시 기록 — 아마 ESO가 매니지드 시크릿에 없는 키를 거의 즉시 원래 3개 키로 되돌리면서 두 번째 변경도 함께 감지된 것으로 추정
+- 이어서 — `kubectl rollout history`에 새 revision 58, 59 생성 확인, `kubectl rollout status` 정상 완료(`kubectl.kubernetes.io/restartedAt` annotation이 pod template에 자동으로 붙은 것으로 트리거 방식 확인), 새 파드 전부 `1/1 Running`
+
+**결과**: 성공 기준 완전 충족. Secret 값이 바뀌면 **사람 개입 없이, 1시간 `refreshInterval`을 기다릴 필요도 없이, 수 초 안에** 자동 롤링 재시작된다는 걸 실측으로 확인. §22/§35의 근본 원인(파드가 옛 Secret에 영구 고착)이 이제 구조적으로 해결됨.
+
+**발견한 문제**: 없음 — 의도한 대로 정확히 동작함. 다만 테스트 키를 추가하자마자 ESO가 되돌리면서 변경이 두 번 감지된 것으로 보이는데, 정확한 인과관계까지는 확인 못 했음(중요하지 않아 더 파지 않음).
+
+**다음에 다시 할 때 참고할 것**:
+- 검증은 실제 값(DB_PASSWORD 등)을 건드리지 않고 무해한 테스트 키 하나만 추가하는 방식으로 진행해 기능 리스크 없이 확인 가능했다 — 이후에도 이 패턴을 재사용할 것.
+- `kubectl patch secret`은 "보안 설정 변경"으로 분류돼 에이전트가 직접 실행할 수 없음 — Secret 관련 검증은 항상 사용자 실행이 필요하다는 점을 미리 안내할 것.
+- **아직 push 전** — `helm/slash-api/templates/deployment.yaml`의 annotation과 `reloader/README.md`가 origin에 반영돼야 ArgoCD가 selfHeal을 켠 상태에서도 이 annotation을 유지한다. push 전까지는 `slash-api` Application의 `syncPolicy.automated`를 해제된 상태로 둬야 함(§8류 마무리 체크리스트에 반영 필요) — push 완료 후 `{"automated":{"prune":true,"selfHeal":true}}`로 복원할 것.
+
+## 37. Secrets 유출 대응 리허설 재검증 — 옛 토큰 무효화 확인 + ROTATE/SET 전략 버그 발견 (2026-08-31)
+
+**시나리오**: §31에서 "직접 검증하지 못함"으로 남겨뒀던 부분 — Valkey AUTH 토큰을 로테이션하면 **옛 토큰이 실제로 즉시 거절되는지** — 을 재검증. 이번엔 로테이션 직전에 옛 토큰을 미리 백업해뒀다가 로테이션 후 그 옛 토큰으로 직접 연결을 시도하는 방식으로 §31의 절차를 그대로 반복하되 한 단계만 추가.
+
+**성공 기준**: 로테이션 후 새 토큰은 연결되고(PONG), 옛 토큰은 거절돼야(WRONGPASS/NOAUTH) 진짜 "유출 무효화"가 확인된 것.
+
+**타임라인** (UTC):
+- 03:41:56 — `aws secretsmanager get-secret-value`로 로테이션 전 옛 토큰을 스크래치 디렉터리에 백업(레포에는 커밋 안 함, 사용 후 즉시 삭제 예정)
+- 03:42:12~03:42:47 — §31과 동일하게 `terraform apply -replace=module.database.random_password.valkey_auth` 실행(영향 범위도 §31과 동일하게 3개 리소스만)
+- 03:42:56~03:44:30 — **로테이션 완료 직후부터 옛 토큰으로 5회 연속 `redis-cli ping` 시도 → 전부 `PONG`.** 즉 §31에서 "구조적으로 더 이상 유효하지 않을 것"이라 판단했던 게 **틀렸다는 게 실측으로 드러남**
+- 원인 확인 — `modules/database/valkey.tf`에 `auth_token_update_strategy`를 명시적으로 지정한 적이 없어 AWS 기본값(`ROTATE`)이 적용되고 있었음. `ROTATE`는 무중단 교체를 위해 신구 토큰을 **당분간 둘 다 허용**하는 전략이고, 이걸 실제로 완전히 무효화하려면 후속으로 `SET` 전략의 apply가 한 번 더 필요하다는 걸 이번에 처음 알게 됨(§31 때는 이 전략 파라미터 자체의 존재를 몰랐음)
+- `modules/database/valkey.tf`의 `aws_elasticache_replication_group.main`에 `auth_token_update_strategy = "SET"` 추가(코드에 영구 반영 — 이 시스템에서 토큰을 바꾸는 유일한 이유는 보안 위생/유출 대응이라 "즉시 무효화"가 기본값으로 맞다고 판단)
+- 03:45:47~03:46:02 — `terraform apply`로 전략을 `ROTATE`→`SET`으로 변경(다른 리소스에 영향 없음, `auth_token_update_strategy` 속성 하나만 in-place 변경)
+- 03:46:12 — 옛 토큰으로 재시도 → **`WRONGPASS invalid username-password pair`** 로 거절 확인. 같은 시각 새 토큰은 여전히 `PONG` — 이번엔 확실하게 "새 토큰만 유효, 옛 토큰은 완전히 무효" 상태 확인
+- 03:46:32 — `kubectl annotate externalsecret slash-api-secrets force-sync=$(date +%s) --overwrite`로 강제 동기화
+- 03:46:34 — **§36에서 막 도입한 Reloader가 이 진짜 시크릿 변경을 자동으로 감지**(`reloader-reloader` 로그에 `Changes detected in 'slash-api-secrets' ... updated 'slash-api'`) → **사람이 `kubectl rollout restart`를 실행하지 않았는데도** 새 파드가 자동으로 뜨기 시작
+- 이후 — 롤아웃 정상 완료, 새 파드 2/2 `Running`(재시작 0회), 최근 로그에 Valkey 관련 에러 전혀 없음, ALB 타겟 정상 `healthy`로 전환
+
+**결과**: 성공 기준 완전 충족. 옛 토큰 무효화까지 직접 확인했고, 그 과정에서 §31의 잘못된 결론(ROTATE 기본값 때문에 실제로는 무효화가 안 되고 있었던 것)까지 바로잡았다. 덤으로 Reloader가 **실제 운영 시나리오(진짜 토큰 로테이션)에서 사람 개입 없이 정상 동작**하는 것까지 한 번에 검증됨 — §36은 무해한 테스트 키로 검증한 거였다면, 이번엔 진짜 상황으로 검증한 셈.
+
+**발견한 문제**:
+1. **§31이 검증 없이 내린 결론이 실제로 틀렸었다.** "ROTATE 단계를 안 거쳤으니 구조적으로 무효화될 것"이라는 추측은 `auth_token_update_strategy` 파라미터의 존재 자체를 몰랐기 때문에 나온 잘못된 근거였다. 검증 없이 "구조적으로 그럴 것"이라고 판단하는 게 왜 위험한지 보여주는 사례 — §31에 정정 각주를 남겨둠.
+2. Terraform이 리소스를 in-place로 "성공적으로 업데이트"했다고 보고해도, 그게 우리가 원하는 실제 동작(즉시 무효화)과 일치하는지는 별개로 확인해야 한다는 교훈 — `terraform apply`가 초록색으로 끝나는 것과 "의도한 보안 효과가 실제로 발생했는지"는 다른 질문.
+
+**다음에 다시 할 때 참고할 것**:
+- 이제 `auth_token_update_strategy = "SET"`이 코드에 고정돼 있으니, 앞으로의 Valkey 토큰 로테이션은 별도 조치 없이도 즉시 무효화된다 — §31/§37에서 했던 "로테이션 전 옛 토큰 백업" 단계는 검증 목적이 아니라면 이제 불필요.
+- RDS 쪽도 관리형 비밀번호 로테이션에 비슷한 "이전 값 유예기간" 개념(`rds:PENDING`/`rds:CURRENT`/`rds:PREVIOUS` 라벨)이 있는지 한 번쯤 확인해볼 가치가 있음 — 이번처럼 "당연히 즉시 무효화될 것"이라는 가정이 또 틀렸을 수도 있음(범위 밖이라 이번엔 확인 안 함).
+- Reloader가 실전 시나리오에서도 검증됐으니, §22/§35 재발 가능성은 이제 "이론상 남은 리스크"가 아니라 "실제로 막힌 문제"로 결론 내려도 됨.
+
+## 38. CloudFront/S3 오리진 차단 재검증 — 캐시 hit 경로도 안 살아남는다 (2026-08-31)
+
+**시나리오**: §29에서 "미검증"으로 남겨뒀던 부분 — 오리진이 막혀도 **이미 엣지에 캐시된 자산은 계속 정상 서빙되는지** — 를 재검증. 캐시된 정적 자산과 캐시 안 된(쿼리스트링으로 무력화한) 요청을 나란히 비교.
+
+**성공 기준**: 캐시 hit 경로는 오리진 차단과 무관하게 200으로 계속 서빙되고, 캐시 miss 경로만 실패해야 "캐싱이 실제로 가용성에 기여한다"고 할 수 있음.
+
+**타임라인** (UTC):
+- 03:5x — 사전 확인: `/assets/index-6JmV0NgU.js`(해시 붙은 빌드 산출물, `Cache-Control: public,max-age=31536000,immutable`)를 반복 요청해 `x-cache: RefreshHit from cloudfront`(엣지 `ICN80-P2`) 확인 — 캐시된 상태임을 먼저 증명
+- 03:56:41 — §29와 동일한 방법으로 S3 버킷 정책에 `Deny` 문 추가(정책 백업 먼저)
+- 즉시 이어서 3가지를 동시에 테스트:
+  - **캐시된 JS 자산을 그대로 재요청** → 예상: 200(캐시에서 서빙) / 실제: **`HTTP 403`, `x-cache: Error from cloudfront`, 응답 바디가 S3 AccessDenied XML** — 캐시에서 안 나가고 오리진 재검증을 시도하다 그대로 실패
+  - 같은 자산을 쿼리스트링으로 캐시 무력화해서 요청(강제 캐시 miss) → `403`, 동일한 AccessDenied XML — 예상대로 실패
+  - `index.html` → `403` — §29와 동일
+- 03:57:09 — 정책 원복(차단 지속 28초), 3초 뒤 재확인 → `index.html`/JS 자산 전부 `200`으로 즉시 정상화
+
+**결과**: **캐시 hit 경로도 오리진 차단에서 살아남지 못한다** — §29 때 "혹시 캐시된 건 괜찮지 않을까"라는 여지를 남겨뒀는데, 실측 결과는 명확히 "아니오"였다.
+
+**발견한 문제**:
+1. **CloudFront의 "stale content 서빙" 동작은 오리진의 5xx/타임아웃에만 적용되고, 이번처럼 오리진이 403(명시적 거부)을 반환하는 경우엔 적용되지 않는다.** `RefreshHit` 상태의 객체(만료 임박이라 백그라운드로 오리진에 재검증하는 상태)가 하필 그 재검증 시도 타이밍에 오리진이 막혀 있으면, 캐시에 있는 멀쩡한 바이트를 서빙하는 대신 오리진의 403 에러를 그대로 클라이언트에 전달한다 — "캐시가 있으니 오리진이 잠깐 막혀도 사용자는 못 느낄 것"이라는 가정이 틀렸다는 뜻. `Error from cloudfront` 상태 자체가 이 사실을 그대로 보여준다.
+2. 완전히 갓 캐시되어 재검증 타이밍과 안 겹치는 객체라면 결과가 다를 수도 있다(이번엔 하필 `RefreshHit` 타이밍에 걸린 것) — 이 케이스(재검증이 전혀 필요 없는, 방금 막 캐시된 객체)까지는 이번에 확인 못 함. 다만 실무적으로 "언젠가는 재검증 타이밍과 겹칠 수 있다"는 점에서 캐싱을 가용성 대책으로 믿기는 어렵다는 결론엔 변함없음.
+
+**다음에 다시 할 때 참고할 것**:
+- "캐싱돼 있으니 오리진 장애에 어느 정도 버틸 것"이라는 가정은 이번 계정/설정 기준으로는 성립하지 않는다 — §13(오리진 페일오버 부재) 논의에 이 사실도 같이 반영할 것.
+- CloudFront의 "Origin Shield"나 캐시 동작 설정에 "오리진 5xx 시 stale 콘텐츠 서빙" 옵션이 있는지, 있다면 403에도 적용되는 변형이 있는지는 이번 범위 밖이라 확인 안 함 — 진짜 가용성을 높이고 싶다면 이 옵션 존재 여부부터 조사해볼 가치 있음.
+- §29의 성공 기준 문구("캐시된 자산은 계속 서빙되는지 확인") 자체를 "캐시 hit이어도 살아남지 못함을 확인"으로 갱신 — §5 인덱스에도 반영.
