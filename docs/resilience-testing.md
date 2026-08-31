@@ -96,4 +96,5 @@
 | 2026-08-30 | CloudFront/S3 오리진 차단 | 성공 (36초 내 원복, 오리진 페일오버 부재 재확인) | operations-log.md §29 |
 | 2026-08-30 | GitHub 장애 대응 리허설 | 성공 (수동 배포 유지, selfHeal 복구 7초) | operations-log.md §30 |
 | 2026-08-30 | Secrets 유출 대응 리허설 (Valkey) | 부분 성공 (새 토큰 검증됨, 옛 토큰 무효화는 미검증) | operations-log.md §31 |
-| 2026-08-31 | 부하테스트 + Container Insights | 부분 충족 (5xx 0건, 스케일아웃은 미확인/재검증 필요, Container Insights IAM 갭 발견 → 이슈 #47) | operations-log.md §32 |
+| 2026-08-31 | 부하테스트 + Container Insights | 부분 충족 (5xx 0건, Container Insights IAM 갭 발견 → 이슈 #47) | operations-log.md §32 |
+| 2026-08-31 | 부하테스트 재검증 (장시간) | 성공 — HPA 정상 확인, 첫 시도의 스케일아웃 미발생은 부하 강도 부족 때문으로 결론 | operations-log.md §33 |
