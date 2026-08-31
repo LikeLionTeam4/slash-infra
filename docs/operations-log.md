@@ -1184,3 +1184,25 @@ concat 인자로 넘기는 리스트끼리는 서로 모양이 달라도 되지�
 - HPA 스케일아웃을 실제로 트리거해보고 싶다면 동시성을 1000 이상으로 올리거나, 인증 우회용 테스트 계정으로 실제 비즈니스 엔드포인트에 부하를 걸 것.
 - 4분을 넘는 부하테스트는 로컬 노트북 대신 EC2(예: 임시 `t3.micro`)나 CI 러너에서 실행해 클라이언트 측 이상 변수를 없앨 것.
 - §32의 "부분 충족" 결론은 이번 §33으로 "HPA 정상, 부하 강도 부족"으로 업데이트됨 — §5 인덱스도 함께 갱신.
+
+## 34. Container Insights IAM 갭 수정 검증 (2026-08-31)
+
+**시나리오**: §32에서 발견한 문제 — `amazon-cloudwatch-observability` addon이 `ACTIVE`인데도 노드 IAM 역할(`slash-eks-node-dev`)에 `logs:PutLogEvents` 권한이 없어 지표가 전혀 안 올라가던 것 — 을 이슈 [#47](https://github.com/LikeLionTeam4/slash-infra/issues/47)에 기록만 해두고 넘어갔는데, 실제로 정책을 붙이면 해결되는지 검증. IAM 정책 부착/해제는 "보안 설정 변경"에 해당해 에이전트가 직접 실행할 수 없어 사용자가 직접 명령을 실행함.
+
+**성공 기준**: `CloudWatchAgentServerPolicy`를 노드 역할에 붙이고 addon을 재설치하면, `cloudwatch-agent` 파드 로그에 `AccessDeniedException`이 재발하지 않고 CloudWatch `ContainerInsights` 네임스페이스에 실제 지표(`pod_cpu_utilization` 등)가 올라오는지 확인.
+
+**타임라인** (UTC):
+- 01:59:xx — 사용자가 직접 `aws iam attach-role-policy --role-name slash-eks-node-dev --policy-arn arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy` 실행, 부착 확인
+- 01:59:57 — `aws eks create-addon --cluster-name slash-eks-dev --addon-name amazon-cloudwatch-observability` 재설치
+- 02:00:37 — addon `ACTIVE`, `cloudwatch-agent`/`fluent-bit`/`amazon-cloudwatch-observability-controller-manager` 파드 전부 새로 기동, `1/1 Running`
+- 02:02:xx — `kubectl logs`로 새 `cloudwatch-agent` 파드 확인 — **`AccessDeniedException` 재발 없음**
+- 02:00:37~02:02:xx — `aws cloudwatch list-metrics --namespace ContainerInsights --dimensions Name=ClusterName,Value=slash-eks-dev`를 20초 간격으로 폴링(Monitor 사용), **약 2분(6회 폴링) 만에 26개 지표 등장** — §32 때는 94분이 지나도 0개였던 것과 대조적
+- 02:02:00 — `get-metric-statistics`로 `slash-api` 파드의 `pod_cpu_utilization` 실측값 확인: 평균 0.139%, 최대 0.153% — 같은 시각 idle 상태의 `kubectl top`(파드당 3~5m/2000m 노드 용량 기준)과 정확히 일치
+
+**결과**: 성공 기준 완전 충족. IAM 갭이 유일한 원인이었고, 정책 하나만 붙이면 addon이 완전히 정상 동작함을 실측으로 확인.
+
+**발견한 문제**: 없음 — 가설이 그대로 맞았음. `logs:PutLogEvents` 권한 부재가 유일한 원인이었고, 다른 숨은 문제는 없었다.
+
+**다음에 다시 할 때 참고할 것**:
+- 이슈 #47에서 "Container Insights를 채택한다"로 결정되면, `modules/eks`(또는 노드그룹 IAM 모듈)에 `CloudWatchAgentServerPolicy` 부착을 Terraform으로 코드화하고 addon도 `aws eks create-addon` CLI 대신 Terraform(`aws_eks_addon`)으로 관리할 것 — 지금은 검증 목적의 임시 CLI 조작이었음.
+- 검증 완료 후 원상복구: addon은 에이전트가 `delete-addon`으로 제거 가능하지만, 방금 붙인 IAM 정책 detach는 이번에도 "보안 설정 변경"이라 에이전트가 직접 할 수 없음 — 사용자가 `aws iam detach-role-policy --role-name slash-eks-node-dev --policy-arn arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy`를 직접 실행해야 완전히 원상복구됨(§8 마무리 체크리스트에 반영).
