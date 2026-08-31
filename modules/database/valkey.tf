@@ -30,6 +30,11 @@ resource "aws_elasticache_replication_group" "main" {
   # AUTH 토큰을 쓰려면 전송 구간 암호화가 필수.
   transit_encryption_enabled = true
   auth_token                 = random_password.valkey_auth.result
+  # 기본값 ROTATE는 새/옛 토큰을 둘 다 당분간 허용한다(무중단 교체용) — 유출 대응처럼
+  # 옛 토큰을 "즉시" 완전히 무효화해야 하는 시나리오엔 안 맞아서 SET으로 고정한다
+  # (operations-log.md §31/§37 참고 — ROTATE 기본값 때문에 §31에서 "옛 토큰 무효화"를
+  # 확인 못 했던 것으로 드러남).
+  auth_token_update_strategy = "SET"
 
   tags = merge(var.tags, {
     Name = "${var.name_prefix}-valkey-${var.environment}"
