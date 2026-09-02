@@ -100,6 +100,18 @@
 | 2026-08-31 | 부하테스트 재검증 (장시간) | 성공 — HPA 정상 확인, 첫 시도의 스케일아웃 미발생은 부하 강도 부족 때문으로 결론 | operations-log.md §33 |
 | 2026-08-31 | Container Insights IAM 갭 수정 검증 | 성공 — 정책 부착만으로 지표 정상 수집 확인 → 이슈 #47 | operations-log.md §34 |
 | 2026-08-31 | 부하테스트 3차 (k6, 실제 부하) | 성공 — HPA 2→4 스케일아웃 실증, max replica로도 부족 확인, §22 문제 실제 재발 발견 → 이슈 #80 | operations-log.md §35 |
-| 2026-08-31 | Reloader 도입 검증 | 성공 — Secret 변경 후 수 초 내 자동 롤링 재시작 확인(§22/§35 근본 해결). **push 전 상태, ArgoCD auto-sync 임시 해제 중** | operations-log.md §36 |
+| 2026-08-31 | Reloader 도입 검증 | 성공 — Secret 변경 후 수 초 내 자동 롤링 재시작 확인(§22/§35 근본 해결). push 완료, ArgoCD auto-sync 복원됨 | operations-log.md §36 |
 | 2026-08-31 | Secrets 유출 대응 재검증 (옛 토큰 무효화) | 성공 — 옛 토큰 거절 확인, §31 오류(ROTATE 기본값) 발견·수정(SET으로 코드 반영), Reloader 실전 검증까지 겸함 | operations-log.md §37 |
 | 2026-08-31 | CloudFront/S3 오리진 차단 재검증 (캐시 hit) | 완료 — 캐시 hit 경로도 오리진 403 차단에서 살아남지 못함을 확인(stale 서빙 미적용) | operations-log.md §38 |
+
+## 6. 미해결 개선 과제
+
+게임데이에서 발견됐지만 아직 해결되지 않은 항목. 상태는 GitHub Issues가 source of truth이며, 여기는 빠르게 찾기 위한 인덱스만 유지한다.
+
+| 항목 | 발견 근거 | 이슈 | 상태 |
+| --- | --- | --- | --- |
+| slash-api/slash-nlu에 PodDisruptionBudget·anti-affinity 부재 | operations-log.md §28 | [#82](https://github.com/LikeLionTeam4/slash-infra/issues/82) | Open |
+| HPA maxReplicas(4)가 실제 트래픽 스파이크를 감당 못 함 | operations-log.md §35 | [#83](https://github.com/LikeLionTeam4/slash-infra/issues/83) | Open |
+| CloudFront 오리진(S3) 완전 차단 시 페일오버·안내 페이지 없음 | operations-log.md §29, §38 | [#84](https://github.com/LikeLionTeam4/slash-infra/issues/84) | Open |
+| Container Insights 채택 여부 미결 (검증은 완료) | operations-log.md §32, §34 | [#47](https://github.com/LikeLionTeam4/slash-infra/issues/47) | Open |
+| RDS 관리형 비밀번호 로테이션 시 파드 고착 재발 대응 | operations-log.md §22, §35 | [#80](https://github.com/LikeLionTeam4/slash-infra/issues/80) | Open (Reloader 도입 완료·push까지 반영됨, 이슈 close 여부만 남음) |
