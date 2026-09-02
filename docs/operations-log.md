@@ -33,13 +33,13 @@ Apply는 이 표의 순서대로, **Destroy는 반대 순서**로 진행한다. 
 | `environments/local/frontend` | 0 | – | **미적용(2026-08-18 destroy)** — dev.sbsh.cloud가 생기면서 역할 완전히 흡수(§11-7) |
 | `environments/local/cognito` | 0 | – | **미적용(2026-08-18 destroy)** — dev Cognito(`ap-northeast-2_kiW46VZ9O`)로 흡수 |
 | `environments/local/eks` | 0 | – | 미적용 — ECR도 bootstrap으로 이전돼서 이제 아무것도 안 남음. 클러스터 재현 이력은 §3/§7 참고 |
-| `environments/dev/network` | 43 | `vpc_id = vpc-0cc23d990ea9b2ba9`, NAT 2개(AZ당 1개) | 적용됨(**2026-08-18 상시운영 전환 재구축**, §11-2). 이전엔 라운드마다 destroy했지만 이제 destroy 예정 없음 |
-| `environments/dev/cognito` | 4 | `user_pool_id = ap-northeast-2_kiW46VZ9O` | 적용됨, 상시 유지(2026-08-18). slash-web dev(§11-7)도 이 값을 그대로 씀 |
-| `environments/dev/database` | 10 | `rds_endpoint = slash-rds-dev.c3qme6c6e7fj.ap-northeast-2.rds.amazonaws.com:5432`, `valkey_endpoint = master.slash-valkey-dev.2iapp0.apn2.cache.amazonaws.com` | 적용됨(2026-08-18), RDS Multi-AZ. **주의**: 시크릿 이름(`rds!db-*`, `slash/valkey/dev`)은 재apply마다 바뀔 수 있음(§11-2 트러블슈팅) — 상시운영이면 더 이상 안 바뀔 것. RDS는 평일 09~21시 KST만 EventBridge Scheduler로 가동(§12), Valkey는 stop/start API가 없어 상시 유지 |
-| `environments/dev/eks` | 24 | `cluster_name = slash-eks-dev`, `api_certificate_arn`(ACM, ISSUED), `slash_api_role_arn = arn:aws:iam::061039804626:role/slash-slash-api-dev` | 적용됨(2026-08-18). ArgoCD(polling 60s, 이슈 #15)/ALB Controller/Karpenter 1.10.0/metrics-server/External Secrets Operator 전부 정상. `argocd/applications-dev/` 3개 전부 **Healthy**(slash-api도 이슈 #23 해소 후 정상 기동). `api.dev.sbsh.cloud` A레코드 연결(§11-7) 포함. 범용 노드그룹은 평일 09~21시 KST만 EventBridge Scheduler로 가동(§12), 컨트롤플레인은 stop 개념이 없어 상시 유지 |
-| `environments/dev/observability` | 8 | `sns_topic_arn = arn:aws:sns:ap-northeast-2:061039804626:slash-alarms-dev` | 적용됨. RDS CPU/스토리지(2026-08-18) + ALB 5xx/레이턴시·Valkey CPU/메모리/eviction 5개(2026-08-19, §13) — GPU 노드그룹 알람만 보류 중(해당 리소스 자체가 없음) |
-| `environments/dev/llm-runtime` | 4 | `ollama_private_ip = 10.8.11.172`(On-Demand, `ap-northeast-2c`) | 적용됨(2026-08-18). Spot 전환 중 두 AZ(2a/2c) 모두 `g4dn.xlarge` 용량 부족을 겪어 같은 날 On-Demand로 재전환(§11-5) — 평일 09~21시 KST만 EventBridge Scheduler로 가동 |
-| `environments/dev/frontend` | 12 | `site_url = https://dev.sbsh.cloud`, `bucket_name = slash-web-dev-061039804626`, `cloudfront_distribution_id = E3509V383MY8KA` | 적용됨(2026-08-18, §11-7). slash-web `deploy-dev.yml` merge → 실배포 → 브라우저로 로그인 리다이렉트까지 왕복 확인 |
+| `environments/dev/network` | 0 | – | **미적용(2026-09-03 destroy, §39)** — dev 전체 destroy. flow-log 버킷에 버전 9,738개 쌓여있어 배치로 비운 뒤 destroy |
+| `environments/dev/cognito` | 0 | – | **미적용(2026-09-03 destroy, §39)** |
+| `environments/dev/database` | 0 | – | **미적용(2026-09-03 destroy, §39)** |
+| `environments/dev/eks` | 0 | – | **미적용(2026-09-03 destroy, §39)** |
+| `environments/dev/observability` | 0 | – | **미적용(2026-09-03 destroy, §39)** |
+| `environments/dev/llm-runtime` | 0 | – | **미적용(2026-08-25 destroy, §23)** — 표기 누락 정정. 코드는 보존, 필요 시 재apply로 복원 가능 |
+| `environments/dev/frontend` | 0 | – | **미적용(2026-09-03 destroy, §39)** |
 | `environments/prod/*` | – | – | 미구축 |
 
 계정은 `061039804626`(부트캠프 공유, 2026-08-13 재발급 — 옛 계정 `727646470302`는 더 이상 접근 불가). 리전 `ap-northeast-2`. 이 표는 스냅샷이라 실제 값이 궁금하면 각 디렉터리에서 `terraform output`으로 재확인할 것 — 아래는 마지막 갱신 시점(2026-08-13) 기준.
@@ -1319,3 +1319,22 @@ concat 인자로 넘기는 리스트끼리는 서로 모양이 달라도 되지�
 - "캐싱돼 있으니 오리진 장애에 어느 정도 버틸 것"이라는 가정은 이번 계정/설정 기준으로는 성립하지 않는다 — §13(오리진 페일오버 부재) 논의에 이 사실도 같이 반영할 것.
 - CloudFront의 "Origin Shield"나 캐시 동작 설정에 "오리진 5xx 시 stale 콘텐츠 서빙" 옵션이 있는지, 있다면 403에도 적용되는 변형이 있는지는 이번 범위 밖이라 확인 안 함 — 진짜 가용성을 높이고 싶다면 이 옵션 존재 여부부터 조사해볼 가치 있음.
 - §29의 성공 기준 문구("캐시된 자산은 계속 서빙되는지 확인") 자체를 "캐시 hit이어도 살아남지 못함을 확인"으로 갱신 — §5 인덱스에도 반영.
+
+## 39. dev 환경 전체 destroy — `Project=slash` 태그 자원 + 개인 생성 자원 정리 (2026-09-03)
+
+§19에서 상시운영으로 전환된 이후 처음으로 `environments/dev` 전체를 destroy했다(팀원 3명의 EKS 접근·CI/CD 자동배포에 영향, 사전 확인 후 진행). `bootstrap`(ECR 3개, Route53 zone, CloudTrail, backend-cicd Role 3개, tfstate 버킷, Budgets)은 계정 공용 자원이라 유지.
+
+**순서**: K8s 레벨 정리 → `observability` → `eks` → `database` → `cognito` → `network`(flow-log 버킷 비우기 선행) → `frontend`. §5 destroy 절차(local 기준)의 "뒤 단계부터" 원칙을 dev 6개 모듈에 그대로 적용.
+
+**트러블슈팅**:
+- **ArgoCD selfHeal 재생성 방지**: `slash-api`/`slash-nlu` Application 둘 다 `{"prune":true,"selfHeal":true}` 확인됨 — §4의 "destroy 중 ArgoCD selfHeal이 Ingress를 되살려 orphan ALB 재생성" 사고가 그대로 재현될 조건이라, Ingress/Service 삭제보다 먼저 Application부터 지워서 회피.
+- **ALB Controller의 공유 백엔드 SG가 DependencyViolation으로 삭제 실패**: Ingress를 지운 뒤 finalizer(`ingress.k8s.aws/resources`)가 안 풀려서 보니, 컨트롤러 로그에 `failed to delete securityGroup: ... DependencyViolation: resource sg-xxx has a dependent object`. 원인은 EKS 노드 SG(`slash-eks-sg-dev`)에 이 백엔드 SG를 참조하는 인바운드 룰(`elbv2.k8s.aws/targetGroupBinding=shared` 태그, 컨트롤러가 자동 생성)이 남아있어서였다. Service를 Ingress보다 먼저 지운 게 원인으로 보임(컨트롤러가 정리 모델을 재계산할 시점엔 이미 대상이 사라져 룰 revoke를 놓친 듯). `aws ec2 revoke-security-group-ingress`로 해당 룰만 직접 제거하니 다음 reconcile에서 정상 정리됨. **교훈**: Ingress delete가 완전히 끝난 뒤(ALB/타겟그룹/SG까지 AWS에서 사라진 걸 확인한 뒤) Service/Deployment를 지우는 순서를 지킬 것.
+- **Karpenter NodePool을 먼저 지운 게 실수**: `kubectl delete nodepool default` 후 `kubectl delete nodeclaims --all`을 했더니 NodeClaim이 `NodePool.karpenter.sh "default" not found` 에러로 계속 reconcile 실패 — NodePool은 NodeClaim이 전부 종료된 *뒤에* 지워야 했다. 게다가 karpenter 컨트롤러 파드 자체가 3시간 넘게 `Pending`이었던 것도 함께 발견: karpenter Deployment의 nodeAffinity가 `karpenter.sh/nodepool DoesNotExist`(자기 자신이 만든 노드에는 못 뜨는 순환 방지 설계)인데, 관리형 노드그룹(`slash-eks-general-dev`)이 `desired=0`으로 스케일다운돼 있어 karpenter가 뜰 노드 자체가 없었다 — dev 상시운영 체제인데도 nodegroup이 0으로 가 있었던 것 자체가 별개의 잠재 이슈(다음에 조사 필요, 야간 스케줄러 §21과 관련 있을 가능성). **조치**: nodegroup을 1대로 임시 스케일업 → karpenter 재기동 확인 후에도 NodePool 참조 에러가 안 풀려서, EC2 인스턴스 4대를 `aws ec2 terminate-instances`로 직접 종료하고 NodeClaim의 `karpenter.sh/termination` finalizer를 `kubectl patch`로 직접 제거해 정리. 인스턴스 4대 중 3대는 이미 예전에 terminated 상태였던 고아 NodeClaim이었다(원인 미상, 이번 조사 범위 밖).
+- **`dev/observability`의 `data "aws_lb" "slash_api"`가 destroy plan도 막음**: 코드 주석(line 67)에 이미 "Ingress를 잠깐이라도 내려서 ALB가 사라진 상태로 apply하면 이 data source가 실패한다"고 경고돼 있었는데, `-destroy` plan도 동일하게 막힌다는 걸 이번에 확인. ALB를 K8s 레벨 정리에서 먼저 지웠기 때문에 발생. **조치**: `alb_arn_suffix`를 더미값으로, data 블록을 주석 처리해 destroy만 통과시킨 뒤 `git checkout`으로 원복(커밋 안 함) — 값 자체는 destroy에 안 쓰이므로(상태 기준으로 리소스 ID만으로 삭제) 안전.
+- `slash-vpc-flow-logs-dev` 버킷: 버저닝 활성 + `force_destroy` 미설정 상태로 9,738개 객체/버전이 쌓여있었다(§10-3 local 사례의 20배 이상 규모) — `list-object-versions`/`delete-objects`를 1,000개씩 배치 처리해 비운 뒤 `network` destroy 진행.
+- `slash-web-dev` 버킷은 의도된 `force_destroy=false`(§ 코드 주석 "실수로 지우는 걸 막는다")라 오브젝트 8개를 `aws s3 rm --recursive`로 수동 삭제 후 destroy.
+- ACM 인증서는 예상대로 2개였다 — `api.dev.sbsh.cloud`(ap-northeast-2, `dev/eks` 소유, ALB용)와 `dev.sbsh.cloud`(us-east-1, `dev/frontend` 소유, CloudFront용). 둘 다 각자 모듈 destroy에 포함돼 정상 제거됨.
+
+**검증**: `aws resourcegroupstaggingapi get-resources --tag-filters Key=Project,Values=slash`로 재조회하면 아직 캐시 지연으로 destroy된 리소스가 보이지만(EC2/NAT/Cognito 등, 최대 수십 분 지연 알려진 동작), `describe-instances`/`describe-nat-gateways`/`describe-vpcs`/`describe-user-pool` 등 실시간 API로 개별 재확인한 결과 전부 실제로 삭제 완료됨. 잔여는 bootstrap 소유 6종뿐. Secrets Manager의 `slash/valkey/dev`는 기본 30일 복구 대기 중(`DeletedDate` 설정됨, 영구 삭제 아님) — RDS managed secret(`rds!db-11d47fea-...`)은 RDS 인스턴스 삭제와 함께 즉시 제거됨(복구 대기 없음, 관리형 시크릿의 정상 동작).
+
+**남은 후속 확인**: 관리형 노드그룹이 상시운영 체제에서도 `desired=0`으로 가 있었던 원인(야간 스케줄러 §21 관련 가능성) — 이번엔 전체 destroy로 덮여서 실증 안 됨, dev를 다시 올리게 되면 재확인할 것.
